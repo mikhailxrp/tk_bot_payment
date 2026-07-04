@@ -1,0 +1,34 @@
+---
+description: General coding principles for all projects
+alwaysApply: true
+---
+
+## Universal
+- One file = one responsibility
+- Always handle errors explicitly (try/catch, fallback UI)
+- No magic numbers — use named constants
+- Prefer simple over clever — if it needs a comment to understand, rewrite it
+- Never hardcode secrets — always use .env
+- Before writing code — make sure you understand the task fully
+- If task is unclear — ask ONE question before coding
+- Always use Context7 to fetch up-to-date documentation
+  before writing code that uses any library or external API
+
+## JavaScript / TypeScript
+- Prettier: 2 spaces, single quotes, semicolons
+- ES Modules, async/await, arrow functions
+- Functional style only — no class-based components
+- Avoid `any` in TypeScript — use proper types or `unknown`
+
+
+## HTML
+- Semantic tags first: `<main>`, `<section>`, `<article>`, `<nav>`
+- Accessibility required: `alt` on images, `aria-*` and `role` where needed
+- No inline styles — use classes
+
+## CSS
+- Mobile-first by default
+- BEM for plain CSS projects; Tailwind for component-based projects
+- Use CSS custom properties instead of magic numbers (`--spacing-md: 1rem`)
+- Avoid `!important` except for utility overrides
+- Group properties: positioning → box model → typography → visual → animation

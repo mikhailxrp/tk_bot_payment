@@ -1,0 +1,10 @@
+{
+  "name": "@tg-bot/admin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo \"apps/admin: stub, real Next.js app lands in Phase 7\"",
+    "build": "echo \"apps/admin: stub, real Next.js app lands in Phase 7\""
+  }
+}

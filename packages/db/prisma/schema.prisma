@@ -1,0 +1,59 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserStatus {
+  NEW
+  ACTIVE
+  MUTED
+  LEFT
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+model User {
+  id                BigInt     @id
+  username          String?
+  firstName         String?
+  status            UserStatus @default(NEW)
+  expiresAt         DateTime?
+  reminderSentAt    DateTime?
+  mutedAt           DateTime?
+  lastMutedRemindAt DateTime?
+  inGroup           Boolean    @default(false)
+  createdAt         DateTime   @default(now())
+  payments          Payment[]
+}
+
+model Payment {
+  id        Int           @id @default(autoincrement())
+  userId    BigInt
+  amount    Decimal       @db.Decimal(10, 2)
+  status    PaymentStatus @default(PENDING)
+  createdAt DateTime      @default(now())
+  paidAt    DateTime?
+  user      User          @relation(fields: [userId], references: [id])
+}
+
+model Admin {
+  telegramId   BigInt   @id
+  username     String?
+  email        String?  @unique
+  passwordHash String?
+  addedBy      BigInt?
+  createdAt    DateTime @default(now())
+}
+
+model Setting {
+  key   String @id
+  value String
+}

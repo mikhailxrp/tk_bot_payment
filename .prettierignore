@@ -1,0 +1,10 @@
+node_modules
+dist
+build
+.next
+coverage
+package-lock.json
+
+# Hand-authored planning/process docs, not formatted by this tooling
+.docs
+.gigacode
