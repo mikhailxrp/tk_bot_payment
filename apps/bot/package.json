@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@tg-bot/db": "*",
+    "grammy": "^1.44.0",
     "pino": "^10.3.1",
     "zod": "^4.4.3"
   },

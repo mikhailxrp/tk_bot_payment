@@ -4,6 +4,43 @@
 
 ---
 
+## 2026-07-04 — Task 2.3: Middleware isAdmin + skeleton /admin
+
+- Создан `apps/bot/src/bot/middleware/isAdmin.ts`: middleware проверяет `ctx.from` (ранний отказ
+  при `undefined`); `prisma.admin.findUnique({ where: { telegramId: BigInt(from.id) } })` на каждый
+  вызов — без сравнения с `config.ADMIN_ID`; админ → `next()`, не-админ → явное сообщение-отказ;
+  ошибки Prisma логируются через pino, пользователю — нейтральный ответ без проброса исключения.
+- Создан `apps/bot/src/bot/handlers/admin.ts`: `handleAdmin` — заглушка «Админ-панель бота:
+  функциональность появится в следующих фазах.».
+- Обновлён `apps/bot/src/bot/bot.ts`: `bot.command('admin', isAdmin, handleAdmin)` — middleware
+  точечно на `/admin`, не через глобальный `bot.use()`.
+- Проверено: `npm run type-check -w apps/bot`, `npm run build -w apps/bot` — проходят.
+
+## 2026-07-04 — Task 2.2: Меню подписки — цена из Setting + заглушка оплаты
+
+- Обновлён `apps/bot/src/bot/keyboards.ts`: `paymentKeyboard(amount)` — `InlineKeyboard` с кнопкой
+  «Оплатить» (`url: https://example.com/payment-placeholder`).
+- Обновлён `apps/bot/src/bot/handlers/start.ts`: `handleSubscribeCallback` — на каждый клик
+  `prisma.setting.findUnique({ where: { key: 'price' } })` (без кэша); валидация значения
+  (`/^\d+(\.\d{1,2})?$/`); при отсутствии/некорректной цене — явное сообщение пользователю;
+  при успехе — `editMessageText` с суммой и клавиатурой оплаты; `ctx.answerCallbackQuery()` в
+  начале хендлера.
+- Обновлён `apps/bot/src/bot/bot.ts`: регистрация `bot.callbackQuery(SUBSCRIBE_CALLBACK,
+  handleSubscribeCallback)`.
+- Проверено: `npm run type-check -w apps/bot` — проходит.
+
+## 2026-07-04 — Task 2.1: Бутстрап бота + upsert User на /start
+
+- Обновлён `apps/bot/package.json`: зависимость `grammy` (^1.44.0).
+- Создан `apps/bot/src/bot/bot.ts`: инстанс `Bot(config.BOT_TOKEN)`, регистрация команды `/start`.
+- Создан `apps/bot/src/bot/handlers/start.ts`: `prisma.user.upsert` по `id` (`BigInt(ctx.from.id)`),
+  `username`/`firstName` через `?? null` в `update` и `create`; приветствие + inline-клавиатура.
+- Создан `apps/bot/src/bot/keyboards.ts`: `InlineKeyboard` с кнопкой «Оформить подписку`
+  (`callback_data: 'subscribe'`; обработчик — Task 2.2).
+- Обновлён `apps/bot/src/index.ts`: `bot.start()` (long polling), `bot.catch` → pino-лог ошибок.
+- Проверено: `npm run type-check -w apps/bot`, `npm run build -w apps/bot` — проходят;
+  `npm run dev -w apps/bot` — long polling стартует без ошибок в консоли.
+
 ## 2026-07-04 — Task 1.5: apps/bot — config.ts (zod) + pino + пустой запуск
 
 - Обновлён `apps/bot/package.json`: зависимости `zod`, `pino`; devDependency `tsx`; `dev` —
