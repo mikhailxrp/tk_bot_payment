@@ -14,7 +14,8 @@
     "format:check": "prettier --check .",
     "type-check": "npm run type-check --workspaces --if-present",
     "dev": "npm run dev --workspaces --if-present",
-    "build": "npm run build --workspaces --if-present"
+    "build": "npm run build --workspaces --if-present",
+    "test": "vitest run --config vitest.config.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
