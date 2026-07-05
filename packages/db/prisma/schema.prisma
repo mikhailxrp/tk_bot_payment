@@ -20,18 +20,24 @@ enum PaymentStatus {
   FAILED
 }
 
+enum ProductType {
+  SUBSCRIPTION
+  LIFETIME
+}
+
 model User {
-  id                BigInt     @id
+  id                BigInt        @id
   username          String?
   firstName         String?
-  status            UserStatus @default(NEW)
+  status            UserStatus    @default(NEW)
   expiresAt         DateTime?
   reminderSentAt    DateTime?
   mutedAt           DateTime?
   lastMutedRemindAt DateTime?
-  inGroup           Boolean    @default(false)
-  createdAt         DateTime   @default(now())
+  inGroup           Boolean       @default(false)
+  createdAt         DateTime      @default(now())
   payments          Payment[]
+  commonAccess      CommonAccess?
 }
 
 model Payment {
@@ -39,9 +45,18 @@ model Payment {
   userId    BigInt
   amount    Decimal       @db.Decimal(10, 2)
   status    PaymentStatus @default(PENDING)
+  product   ProductType   @default(SUBSCRIPTION)
   createdAt DateTime      @default(now())
   paidAt    DateTime?
   user      User          @relation(fields: [userId], references: [id])
+}
+
+model CommonAccess {
+  userId    BigInt   @id
+  paidAt    DateTime
+  inGroup   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
 }
 
 model Admin {

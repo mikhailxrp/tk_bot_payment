@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type UpdateManyResult = { count: number };
 type PaymentRecord = { id: number; status: string };
-type PaymentWithUser = { id: number; userId: bigint };
+type PaymentWithUser = { id: number; userId: bigint; product: string };
 type SettingRecord = { value: string } | null;
 type UserRecord = { status: string; expiresAt: Date | null };
 
@@ -22,6 +22,9 @@ type MockTxClient = {
     findUniqueOrThrow: (args: unknown) => Promise<UserRecord>;
     update: (args: unknown) => Promise<unknown>;
   };
+  commonAccess: {
+    upsert: (args: unknown) => Promise<unknown>;
+  };
 };
 
 const {
@@ -32,6 +35,7 @@ const {
   mockSettingFindUnique,
   mockUserFindUniqueOrThrow,
   mockUserUpdate,
+  mockCommonAccessUpsert,
 } = vi.hoisted(() => ({
   mockTransaction:
     vi.fn<(callback: (tx: MockTxClient) => Promise<unknown>) => Promise<unknown>>(),
@@ -41,12 +45,17 @@ const {
   mockSettingFindUnique: vi.fn<(args: unknown) => Promise<SettingRecord>>(),
   mockUserFindUniqueOrThrow: vi.fn<(args: unknown) => Promise<UserRecord>>(),
   mockUserUpdate: vi.fn<(args: unknown) => Promise<unknown>>(),
+  mockCommonAccessUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
 }));
 
 vi.mock('@tg-bot/db', () => ({
   PaymentStatus: {
     PENDING: 'PENDING',
     PAID: 'PAID',
+  },
+  ProductType: {
+    SUBSCRIPTION: 'SUBSCRIPTION',
+    LIFETIME: 'LIFETIME',
   },
   UserStatus: {
     ACTIVE: 'ACTIVE',
@@ -94,13 +103,18 @@ describe('POST /robokassa/result', () => {
 
     mockUpdateMany.mockResolvedValue({ count: 1 });
     mockFindUnique.mockResolvedValue(null);
-    mockFindUniqueOrThrow.mockResolvedValue({ id: 42, userId: BigInt(1) });
+    mockFindUniqueOrThrow.mockResolvedValue({
+      id: 42,
+      userId: BigInt(1),
+      product: 'SUBSCRIPTION',
+    });
     mockSettingFindUnique.mockResolvedValue({ value: '30' });
     mockUserFindUniqueOrThrow.mockResolvedValue({
       status: 'ACTIVE',
       expiresAt: null,
     });
     mockUserUpdate.mockResolvedValue({});
+    mockCommonAccessUpsert.mockResolvedValue({});
 
     mockTransaction.mockImplementation((callback) =>
       callback({
@@ -115,6 +129,9 @@ describe('POST /robokassa/result', () => {
         user: {
           findUniqueOrThrow: mockUserFindUniqueOrThrow,
           update: mockUserUpdate,
+        },
+        commonAccess: {
+          upsert: mockCommonAccessUpsert,
         },
       }),
     );
@@ -174,6 +191,59 @@ describe('POST /robokassa/result', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toBe(`OK${invId}`);
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+    expect(mockFindUniqueOrThrow).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('processes LIFETIME payment with CommonAccess upsert without touching user', async () => {
+    mockFindUniqueOrThrow.mockResolvedValue({
+      id: 42,
+      userId: BigInt(99),
+      product: 'LIFETIME',
+    });
+
+    const app = await createTestApp();
+    const outSum = '500.00';
+    const invId = 42;
+
+    const response = await postWebhook(app, {
+      OutSum: outSum,
+      InvId: String(invId),
+      SignatureValue: buildValidSignature(outSum, invId),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe(`OK${invId}`);
+    expect(mockCommonAccessUpsert).toHaveBeenCalledWith({
+      where: { userId: BigInt(99) },
+      create: { userId: BigInt(99), paidAt: expect.any(Date) as unknown },
+      update: { paidAt: expect.any(Date) as unknown },
+    });
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+    expect(mockSettingFindUnique).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('returns OK for already PAID LIFETIME payment without upserting CommonAccess again', async () => {
+    mockUpdateMany.mockResolvedValue({ count: 0 });
+    mockFindUnique.mockResolvedValue({ id: 42, status: 'PAID' });
+
+    const app = await createTestApp();
+    const outSum = '500.00';
+    const invId = 42;
+
+    const response = await postWebhook(app, {
+      OutSum: outSum,
+      InvId: String(invId),
+      SignatureValue: buildValidSignature(outSum, invId),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe(`OK${invId}`);
+    expect(mockCommonAccessUpsert).not.toHaveBeenCalled();
     expect(mockUserUpdate).not.toHaveBeenCalled();
     expect(mockFindUniqueOrThrow).not.toHaveBeenCalled();
 
