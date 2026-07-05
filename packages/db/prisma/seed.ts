@@ -8,6 +8,7 @@ const DEFAULT_SETTINGS = [
   { key: 'remind_days', value: '3' },
   { key: 'muted_remind_days', value: '10' },
   { key: 'cron_time', value: '09:00' },
+  { key: 'price_common', value: '500' },
 ] as const;
 
 async function main(): Promise<void> {
@@ -20,7 +21,7 @@ async function main(): Promise<void> {
     await prisma.setting.upsert({
       where: { key: setting.key },
       create: { key: setting.key, value: setting.value },
-      update: { value: setting.value },
+      update: {},
     });
   }
 

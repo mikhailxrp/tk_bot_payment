@@ -1,5 +1,6 @@
 process.env.BOT_TOKEN = 'test-bot-token';
 process.env.GROUP_ID = '-1001234567890';
+process.env.COMMON_GROUP_ID = '-1009876543210';
 process.env.ADMIN_ID = '123456789';
 process.env.ROBO_LOGIN = 'testmerchant';
 process.env.ROBO_PASS1 = 'pass1secret';

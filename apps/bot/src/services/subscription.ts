@@ -45,3 +45,15 @@ export async function applyPayment(
     },
   });
 }
+
+export async function applyCommonAccess(
+  tx: Prisma.TransactionClient,
+  payment: Payment,
+  now: Date,
+): Promise<void> {
+  await tx.commonAccess.upsert({
+    where: { userId: payment.userId },
+    create: { userId: payment.userId, paidAt: now },
+    update: { paidAt: now },
+  });
+}

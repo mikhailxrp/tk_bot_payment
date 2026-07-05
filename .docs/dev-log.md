@@ -4,6 +4,89 @@
 
 ---
 
+## 2026-07-05 — Task 4.3: Webhook — ветвление по продукту + тесты
+
+- Обновлён `apps/bot/src/payments/webhook.ts`: после `payment.findUniqueOrThrow` ветвление по
+  `payment.product` внутри той же транзакции; `ProductType.LIFETIME` → `applyCommonAccess`
+  (без чтения `Setting.period_days`); иначе — прежняя логика Фазы 3 (`period_days` +
+  `applyPayment`); идемпотентность через `updateMany`-guard на `PENDING` без изменений.
+- Обновлён `apps/bot/src/services/subscription.ts`: новая функция `applyCommonAccess(tx, payment, now)` —
+  `tx.commonAccess.upsert` (`create: { userId, paidAt: now }`, `update: { paidAt: now }`);
+  `tx.user` не трогает (`expiresAt`/`status`/флаги напоминаний остаются без изменений).
+- Обновлён `apps/bot/test/webhook.test.ts`: мок `@tg-bot/db` дополнен `ProductType` и
+  `commonAccess.upsert`; 2 новых теста — LIFETIME happy path (upsert с верными данными,
+  `user.update` не вызван, `period_days` не запрашивается), LIFETIME idempotent repeat
+  (повторный POST по `PAID` → `OK{InvId}` без повторного upsert); регрессия SUBSCRIPTION — 3
+  существующих теста без изменения ожиданий.
+- Out of scope соблюдён: invite-ссылки и уведомления (Фаза 5), реальные вызовы Telegram API,
+  изменения `/start`/keyboards, правки схемы `CommonAccess`/`price_common`.
+- Проверено: `npm test` — 26 passed; `npm run type-check`, `npm run lint` — без ошибок.
+  Фаза 4: все таски (4.1–4.3) ✅; остался PR `phase-4` → `dev`.
+
+## 2026-07-05 — Task 4.2: /start — выбор группы, оплата общей группы
+
+- Обновлён `apps/bot/src/bot/keyboards.ts`: константа `COMMON_ACCESS_CALLBACK`;
+  `productChoiceKeyboard(showCommonAccessButton)` — «Закрытая группа (подписка)» /
+  «Общая группа (разовый доступ)» или только первая кнопка, если общий доступ уже оплачен;
+  `subscribeKeyboard()` заменён на выбор продукта.
+- Обновлён `apps/bot/src/bot/handlers/start.ts`: `handleStart` — upsert пользователя,
+  `commonAccess.findUnique` до построения клавиатуры; при наличии `CommonAccess` — текст
+  «Доступ в общую группу уже оплачен» и одна кнопка подписки; deep-link `paid`/`fail` без
+  изменений (выход до Prisma). Новый `handleCommonAccessCallback`: цена из `Setting.price_common`
+  (без `period_days`), валидация `PRICE_PATTERN`, `Payment(PENDING, product=LIFETIME)`,
+  `buildPaymentUrl` с Description/Receipt «Разовый доступ в общую группу»; защита от повторной
+  оплаты в callback. `handleSubscribeCallback` — без изменений по логике (регрессия).
+- Обновлён `apps/bot/src/bot/bot.ts`: регистрация
+  `bot.callbackQuery(COMMON_ACCESS_CALLBACK, handleCommonAccessCallback)`.
+- Создан `apps/bot/test/start.test.ts`: 9 тестов — `/start` с/без `CommonAccess`, создание
+  LIFETIME-платежа, регрессия SUBSCRIBE-callback, deep-link `paid`/`fail`; мок `@tg-bot/db`
+  через `vi.hoisted()`.
+- Out of scope соблюдён: webhook LIFETIME (Task 4.3), invite-ссылки (Фаза 5).
+- Проверено: `npm test` — 24 passed; `npm run type-check`, `npm run lint` — без ошибок;
+  `npm run build -w apps/bot` — OK (полный `npm run build` упал на `prisma generate` EPERM
+  Windows — query engine занят другим процессом, к коду таска не относится).
+
+## 2026-07-05 — Task 4.1: БД и конфиг — ProductType, CommonAccess, price_common, COMMON_GROUP_ID
+
+- Обновлён `packages/db/prisma/schema.prisma`: enum `ProductType` (`SUBSCRIPTION` | `LIFETIME`);
+  `Payment.product ProductType @default(SUBSCRIPTION)` (NOT NULL, без бэкфилла); модель
+  `CommonAccess` (`userId BigInt @id`, `paidAt`, `inGroup @default(false)`, `createdAt`);
+  `User.commonAccess CommonAccess?`.
+- Миграция `20260705145215_two_products/migration.sql` применена к реальной MySQL через
+  `migrate:deploy`; `migrate status` — «Database schema is up to date!» (обход P3014: diff →
+  deploy, без shadow DB).
+- Обновлён `packages/db/prisma/seed.ts`: ключ `price_common=500` (заглушка prd п.11);
+  upsert с пустым `update` — идемпотентно, существующие значения не перезатираются.
+- Обновлён `packages/db/src/index.ts`: реэкспорт типа `CommonAccess` и value `ProductType`
+  (импорт из `@tg-bot/db`, не из `@prisma/client` — совместимость с `vi.mock` в тестах).
+- Обновлён `apps/bot/src/config.ts`: обязательный `COMMON_GROUP_ID` через
+  `bigIntFromNonEmptyString` (отрицательный id супергруппы, как `GROUP_ID`).
+- Обновлён `.env.example`: `COMMON_GROUP_ID=` в блоке Telegram bot; реальный `.env` дополнен.
+- Обновлён `apps/bot/test/setup.ts`: фиктивный `COMMON_GROUP_ID` до импорта `config.ts`.
+- Поведение бота не менялось (`/start`, webhook, клавиатуры — out of scope таска 4.2–4.3).
+- Проверено: существующие `Payment` читаются с `product = SUBSCRIPTION`; CRUD `CommonAccess`
+  через Prisma (таблица пустая, готова к Фазе 5); `npm test` — 15 passed;
+  `npm run type-check`, `npm run lint`, `npm run build` — без ошибок во всех workspace.
+
+## 2026-07-05 — Планирование: второй продукт (общая группа) + перенумерация фаз
+
+- Новое требование: бот заменяет два существующих бота на одном магазине Робокассы —
+  добавлен второй продукт «общая группа» (разовый платёж меньшей суммы, бессрочный доступ,
+  без mute/напоминаний). Заодно снимается конфликт Result URL (один магазин — один webhook).
+- Решение (вариант A): новая **Фаза 4 «Два продукта: общая группа + выбор в /start»**
+  вставлена до выдачи доступа, чтобы invite-логика писалась один раз под обе группы;
+  прежние фазы 4–10 перенумерованы в 5–11 (файлов/веток phase-4+ ещё не существовало —
+  перенумерация безопасна).
+- Обновлено: `prd.md` (п.1/2/3.1/3.6/5.1/6/7/8/9/10/11 — enum `ProductType`, `Payment.product`,
+  таблица `CommonAccess`, `Setting.price_common`, env `COMMON_GROUP_ID`; из «вне скоупа» убрано
+  противоречие «несколько групп»), `phases.md` (карта зависимостей, новая фаза, перенумерация),
+  `_status.md` (таблица, журнал решений), `CLAUDE.md` (описание проекта + правило 16),
+  создан `.docs/phases/phase-4.md` (таски 4.1–4.3: БД/конфиг → /start выбор → ветвление webhook).
+- Решения планирования Фазы 5 (бывш. 4) из параллельной сессии сохранены в журнале `_status.md`;
+  таск `services/notify.ts` (TASK.md) остаётся валидным — продукто-независим, отнесён к Фазе 5.
+- Открытые вопросы (prd п.11): точная цена `price_common` (в сиде заглушка 500), нужны ли
+  админам отдельные сводки по общей группе.
+
 ## 2026-07-05 — Task 3.5: Тесты (vitest) — подписи, Receipt-кодирование, продление, webhook
 
 - Создан `vitest.config.ts` (root): `include` на `apps/bot/test/**/*.test.ts`, `setupFiles` на

@@ -8,5 +8,6 @@ export type {
   Payment,
   Admin,
   Setting,
+  CommonAccess,
 } from '@prisma/client';
-export { UserStatus, PaymentStatus } from '@prisma/client';
+export { UserStatus, PaymentStatus, ProductType } from '@prisma/client';

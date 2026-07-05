@@ -1,10 +1,10 @@
-import { PaymentStatus, prisma } from '@tg-bot/db';
+import { PaymentStatus, ProductType, prisma } from '@tg-bot/db';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { logger } from '../logger.js';
 import { verifyResultSignature } from './robokassa.js';
-import { applyPayment } from '../services/subscription.js';
+import { applyCommonAccess, applyPayment } from '../services/subscription.js';
 
 const PERIOD_DAYS_PATTERN = /^\d+$/;
 
@@ -53,29 +53,42 @@ export function registerRobokassaWebhook(fastify: FastifyInstance): void {
 
         const payment = await tx.payment.findUniqueOrThrow({ where: { id: InvId } });
 
-        const periodDaysSetting = await tx.setting.findUnique({
-          where: { key: 'period_days' },
-        });
-        const periodDaysRaw = periodDaysSetting?.value;
-        if (
-          !periodDaysRaw ||
-          !PERIOD_DAYS_PATTERN.test(periodDaysRaw) ||
-          Number(periodDaysRaw) <= 0
-        ) {
-          throw new Error('Invalid period_days setting');
+        if (payment.product === ProductType.LIFETIME) {
+          await applyCommonAccess(tx, payment, now);
+
+          logger.info(
+            {
+              paymentId: payment.id,
+              userId: payment.userId.toString(),
+              product: payment.product,
+            },
+            'robokassa webhook: payment processed',
+          );
+        } else {
+          const periodDaysSetting = await tx.setting.findUnique({
+            where: { key: 'period_days' },
+          });
+          const periodDaysRaw = periodDaysSetting?.value;
+          if (
+            !periodDaysRaw ||
+            !PERIOD_DAYS_PATTERN.test(periodDaysRaw) ||
+            Number(periodDaysRaw) <= 0
+          ) {
+            throw new Error('Invalid period_days setting');
+          }
+          const periodDays = Number(periodDaysRaw);
+
+          await applyPayment(tx, payment, now, periodDays);
+
+          logger.info(
+            {
+              paymentId: payment.id,
+              userId: payment.userId.toString(),
+              periodDays,
+            },
+            'robokassa webhook: payment processed',
+          );
         }
-        const periodDays = Number(periodDaysRaw);
-
-        await applyPayment(tx, payment, now, periodDays);
-
-        logger.info(
-          {
-            paymentId: payment.id,
-            userId: payment.userId.toString(),
-            periodDays,
-          },
-          'robokassa webhook: payment processed',
-        );
 
         return { kind: 'ok' as const, invId: InvId };
       });
