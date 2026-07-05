@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./dist/src/index.js"
   },
   "scripts": {
     "generate": "node --env-file=../../.env ../../node_modules/prisma/build/index.js generate",
@@ -12,7 +12,7 @@
     "migrate:deploy": "node --env-file=../../.env ../../node_modules/prisma/build/index.js migrate deploy",
     "studio": "node --env-file=../../.env ../../node_modules/prisma/build/index.js studio",
     "seed": "node --env-file=../../.env --import tsx prisma/seed.ts",
-    "build": "npm run generate",
+    "build": "npm run generate && tsc",
     "type-check": "tsc --noEmit"
   },
   "prisma": {
