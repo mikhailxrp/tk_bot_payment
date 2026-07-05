@@ -29,12 +29,16 @@ const {
   mockCommonAccessFindUnique,
   mockSettingFindUnique,
   mockPaymentCreate,
+  mockResendCommonAccessInviteLink,
 } = vi.hoisted(() => ({
   mockUserUpsert: vi.fn<(args: UserUpsertArgs) => Promise<unknown>>(),
   mockCommonAccessFindUnique:
-    vi.fn<(args: { where: { userId: bigint } }) => Promise<{ userId: bigint } | null>>(),
+    vi.fn<
+      (args: { where: { userId: bigint } }) => Promise<{ userId: bigint; inGroup: boolean } | null>
+    >(),
   mockSettingFindUnique: vi.fn<(args: SettingFindArgs) => Promise<{ value: string } | null>>(),
   mockPaymentCreate: vi.fn<(args: PaymentCreateArgs) => Promise<{ id: number }>>(),
+  mockResendCommonAccessInviteLink: vi.fn<(userId: bigint) => Promise<void>>(),
 }));
 
 vi.mock('@tg-bot/db', () => ({
@@ -62,13 +66,19 @@ vi.mock('@tg-bot/db', () => ({
   },
 }));
 
+vi.mock('../src/services/subscription.js', () => ({
+  resendCommonAccessInviteLink: mockResendCommonAccessInviteLink,
+}));
+
 import {
   handleCommonAccessCallback,
+  handleResendAccessCallback,
   handleStart,
   handleSubscribeCallback,
 } from '../src/bot/handlers/start.js';
 import {
   COMMON_ACCESS_CALLBACK,
+  RESEND_ACCESS_CALLBACK,
   SUBSCRIBE_CALLBACK,
 } from '../src/bot/keyboards.js';
 
@@ -150,8 +160,11 @@ describe('handleStart', () => {
     });
   });
 
-  it('hides common access button and shows paid message when CommonAccess exists', async () => {
-    mockCommonAccessFindUnique.mockResolvedValue({ userId: TEST_USER_ID_BIGINT });
+  it('hides common access button and shows paid message when CommonAccess exists in group', async () => {
+    mockCommonAccessFindUnique.mockResolvedValue({
+      userId: TEST_USER_ID_BIGINT,
+      inGroup: true,
+    });
     const { ctx, reply } = createMockContext();
 
     await handleStart(ctx);
@@ -166,6 +179,28 @@ describe('handleStart', () => {
     expect(buttons[0]).toMatchObject({
       text: 'Закрытая группа (подписка)',
       callback_data: SUBSCRIBE_CALLBACK,
+    });
+  });
+
+  it('shows resend access button when CommonAccess exists but user is not in group', async () => {
+    mockCommonAccessFindUnique.mockResolvedValue({
+      userId: TEST_USER_ID_BIGINT,
+      inGroup: false,
+    });
+    const { ctx, reply } = createMockContext();
+
+    await handleStart(ctx);
+
+    expect(reply).toHaveBeenCalledWith(
+      expect.stringContaining('Доступ в общую группу уже оплачен.'),
+      expect.any(Object),
+    );
+
+    const buttons = getInlineKeyboardButtons(reply);
+    expect(buttons).toHaveLength(2);
+    expect(buttons[1]).toMatchObject({
+      text: 'Получить ссылку снова',
+      callback_data: RESEND_ACCESS_CALLBACK,
     });
   });
 
@@ -272,7 +307,10 @@ describe('handleCommonAccessCallback', () => {
   });
 
   it('does not create payment when CommonAccess already exists', async () => {
-    mockCommonAccessFindUnique.mockResolvedValue({ userId: TEST_USER_ID_BIGINT });
+    mockCommonAccessFindUnique.mockResolvedValue({
+      userId: TEST_USER_ID_BIGINT,
+      inGroup: true,
+    });
     const { ctx, reply } = createMockContext();
 
     await handleCommonAccessCallback(ctx);
@@ -291,5 +329,65 @@ describe('handleCommonAccessCallback', () => {
       'Стоимость доступа в общую группу временно недоступна. Попробуйте позже.',
     );
     expect(mockPaymentCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleResendAccessCallback', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCommonAccessFindUnique.mockResolvedValue(null);
+    mockResendCommonAccessInviteLink.mockResolvedValue(undefined);
+  });
+
+  it('replies "already active" and does not call the service when CommonAccess is absent', async () => {
+    const { ctx, reply, answerCallbackQuery } = createMockContext();
+
+    await handleResendAccessCallback(ctx);
+
+    expect(answerCallbackQuery).toHaveBeenCalledOnce();
+    expect(reply).toHaveBeenCalledWith('Доступ в общую группу уже активен.');
+    expect(mockResendCommonAccessInviteLink).not.toHaveBeenCalled();
+  });
+
+  it('replies "already active" and does not call the service when inGroup=true', async () => {
+    mockCommonAccessFindUnique.mockResolvedValue({
+      userId: TEST_USER_ID_BIGINT,
+      inGroup: true,
+    });
+    const { ctx, reply } = createMockContext();
+
+    await handleResendAccessCallback(ctx);
+
+    expect(reply).toHaveBeenCalledWith('Доступ в общую группу уже активен.');
+    expect(mockResendCommonAccessInviteLink).not.toHaveBeenCalled();
+  });
+
+  it('calls resendCommonAccessInviteLink and does not create a Payment when inGroup=false', async () => {
+    mockCommonAccessFindUnique.mockResolvedValue({
+      userId: TEST_USER_ID_BIGINT,
+      inGroup: false,
+    });
+    const { ctx, reply } = createMockContext();
+
+    await handleResendAccessCallback(ctx);
+
+    expect(mockResendCommonAccessInviteLink).toHaveBeenCalledWith(TEST_USER_ID_BIGINT);
+    expect(mockPaymentCreate).not.toHaveBeenCalled();
+    expect(reply).not.toHaveBeenCalled();
+  });
+
+  it('replies with an error message and does not throw when the service fails', async () => {
+    mockCommonAccessFindUnique.mockResolvedValue({
+      userId: TEST_USER_ID_BIGINT,
+      inGroup: false,
+    });
+    mockResendCommonAccessInviteLink.mockRejectedValue(new Error('telegram error'));
+    const { ctx, reply } = createMockContext();
+
+    await expect(handleResendAccessCallback(ctx)).resolves.toBeUndefined();
+
+    expect(reply).toHaveBeenCalledWith(
+      'Не удалось создать ссылку для вступления. Попробуйте позже или обратитесь к администратору.',
+    );
   });
 });

@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import formbody from '@fastify/formbody';
+import { API_CONSTANTS } from 'grammy';
 
 import { bot } from './bot/bot.js';
 import { config } from './config.js';
@@ -25,6 +26,7 @@ await Promise.all([
     logger.info({ port: config.PORT }, 'fastify listening');
   }),
   bot.start({
+    allowed_updates: [...API_CONSTANTS.DEFAULT_UPDATE_TYPES, 'chat_member'],
     onStart: (botInfo) => {
       logger.info({ username: botInfo.username }, 'bot started (long polling)');
     },

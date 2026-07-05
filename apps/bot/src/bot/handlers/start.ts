@@ -1,8 +1,14 @@
 import { PaymentStatus, ProductType, prisma } from '@tg-bot/db';
 import type { Context } from 'grammy';
 
+import { logger } from '../../logger.js';
 import { buildPaymentUrl, formatOutSum } from '../../payments/robokassa.js';
-import { paymentKeyboard, productChoiceKeyboard } from '../keyboards.js';
+import { resendCommonAccessInviteLink } from '../../services/subscription.js';
+import {
+  type CommonAccessUiState,
+  paymentKeyboard,
+  productChoiceKeyboard,
+} from '../keyboards.js';
 
 const WELCOME_MESSAGE =
   'Добро пожаловать! Выберите группу для оформления доступа.';
@@ -22,6 +28,11 @@ const COMMON_PRICE_UNAVAILABLE_MESSAGE =
   'Стоимость доступа в общую группу временно недоступна. Попробуйте позже.';
 
 const COMMON_ACCESS_ALREADY_PAID_MESSAGE = 'Доступ в общую группу уже оплачен.';
+
+const COMMON_ACCESS_ALREADY_ACTIVE_MESSAGE = 'Доступ в общую группу уже активен.';
+
+const RESEND_LINK_ERROR_MESSAGE =
+  'Не удалось создать ссылку для вступления. Попробуйте позже или обратитесь к администратору.';
 
 const COMMON_ACCESS_DESCRIPTION = 'Разовый доступ в общую группу';
 
@@ -71,13 +82,20 @@ export async function handleStart(ctx: Context): Promise<void> {
     where: { userId },
   });
 
-  const hasCommonAccess = commonAccess !== null;
-  const message = hasCommonAccess
-    ? `${WELCOME_MESSAGE}\n\n${COMMON_ACCESS_PAID_MESSAGE}`
-    : WELCOME_MESSAGE;
+  const commonAccessState: CommonAccessUiState =
+    commonAccess === null
+      ? 'none'
+      : commonAccess.inGroup
+        ? 'paid_in_group'
+        : 'paid_not_in_group';
+
+  const message =
+    commonAccessState === 'none'
+      ? WELCOME_MESSAGE
+      : `${WELCOME_MESSAGE}\n\n${COMMON_ACCESS_PAID_MESSAGE}`;
 
   await ctx.reply(message, {
-    reply_markup: productChoiceKeyboard(!hasCommonAccess),
+    reply_markup: productChoiceKeyboard(commonAccessState),
   });
 }
 
@@ -180,4 +198,31 @@ export async function handleCommonAccessCallback(ctx: Context): Promise<void> {
   }
 
   await ctx.reply(text, { reply_markup: keyboard });
+}
+
+export async function handleResendAccessCallback(ctx: Context): Promise<void> {
+  await ctx.answerCallbackQuery();
+
+  const from = ctx.from;
+  if (!from) {
+    return;
+  }
+
+  const userId = BigInt(from.id);
+
+  const commonAccess = await prisma.commonAccess.findUnique({
+    where: { userId },
+  });
+
+  if (!commonAccess || commonAccess.inGroup) {
+    await ctx.reply(COMMON_ACCESS_ALREADY_ACTIVE_MESSAGE);
+    return;
+  }
+
+  try {
+    await resendCommonAccessInviteLink(userId);
+  } catch (err) {
+    logger.error({ err, userId: userId.toString() }, 'failed to resend common access invite link');
+    await ctx.reply(RESEND_LINK_ERROR_MESSAGE);
+  }
 }
