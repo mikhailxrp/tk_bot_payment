@@ -1,0 +1,14 @@
+process.env.BOT_TOKEN = 'test-bot-token';
+process.env.GROUP_ID = '-1001234567890';
+process.env.ADMIN_ID = '123456789';
+process.env.ROBO_LOGIN = 'testmerchant';
+process.env.ROBO_PASS1 = 'pass1secret';
+process.env.ROBO_PASS2 = 'pass2secret';
+process.env.ROBO_IS_TEST = 'true';
+process.env.ROBO_SNO = 'usn_income';
+process.env.ROBO_TAX = 'none';
+process.env.DATABASE_URL = 'mysql://test:test@localhost:3306/test';
+process.env.ADMIN_PANEL_URL = 'http://localhost:3001';
+process.env.INTERNAL_API_TOKEN = 'test-internal-token';
+process.env.AUTH_SECRET = 'test-auth-secret';
+process.env.PORT = '3000';

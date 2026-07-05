@@ -4,6 +4,88 @@
 
 ---
 
+## 2026-07-05 — Task 3.5: Тесты (vitest) — подписи, Receipt-кодирование, продление, webhook
+
+- Создан `vitest.config.ts` (root): `include` на `apps/bot/test/**/*.test.ts`, `setupFiles` на
+  `apps/bot/test/setup.ts`; пути относительно конфига (forward slashes) — работает из корня и
+  из `npm run test -w apps/bot`.
+- Обновлён `package.json` (root): скрипт `"test": "vitest run --config vitest.config.ts"`.
+- Обновлён `apps/bot/package.json`: devDependency `vitest`, скрипт
+  `"test": "vitest run --config ../../vitest.config.ts"`.
+- Создан `apps/bot/test/setup.ts`: фиктивные env (`BOT_TOKEN`, `GROUP_ID`, `ADMIN_ID`,
+  `ROBO_*`, `DATABASE_URL`, `ADMIN_PANEL_URL`, `INTERNAL_API_TOKEN`, `AUTH_SECRET`, `PORT`)
+  выставляются до импорта модулей с `config.ts`.
+- Создан `apps/bot/test/robokassa.test.ts`: `formatOutSum`; подпись ссылки
+  `md5(Login:OutSum:InvId:Receipt:Pass1)` с однократным URL-кодированием Receipt; двойное
+  кодирование Receipt в query string (проверка через regex в сыром URL, не через
+  `URLSearchParams`); `verifyResultSignature` — case-insensitive, Receipt не участвует.
+- Создан `apps/bot/test/subscription.test.ts`: `calculateNewExpiresAt` — активная подписка
+  (`expiresAt + period_days`), истёкшая, `null`, граница `expiresAt === now`.
+- Создан `apps/bot/test/webhook.test.ts`: Fastify + `@fastify/formbody`, `@tg-bot/db` замокан
+  через `vi.hoisted()`; валидный webhook → `OK{InvId}` + guard `updateMany(PENDING)`; неверная
+  подпись → `400` без `$transaction`; повторный `PAID` → `OK{InvId}` без `user.update`.
+- Бизнес-логика (`robokassa.ts`, `webhook.ts`, `subscription.ts`) не менялась.
+- Проверено: `npm test` — 15 passed; `npm run test -w apps/bot` — 15 passed;
+  `npm run type-check` — проходит.
+
+## 2026-07-05 — Task 3.4: Success/Fail deep-link (`/start paid|fail`)
+
+- Обновлён `apps/bot/src/bot/handlers/start.ts`: в `handleStart` читается `ctx.match` (пустая
+  строка при обычном `/start`); при `'paid'` — `PAYMENT_SUCCESS_MESSAGE`, при `'fail'` —
+  `PAYMENT_FAIL_MESSAGE`; обе ветки выходят до upsert и без обращения к Prisma. Пустой или
+  неизвестный payload — прежняя логика (upsert + `subscribeKeyboard()`).
+- `apps/bot/src/bot/bot.ts` без изменений — `bot.command('start', handleStart)` уже передаёт
+  `ctx.match`.
+- Проверено: `npm run type-check` — проходит.
+
+## 2026-07-05 — Task 3.3: Fastify + POST /robokassa/result — подпись, идемпотентность, продление
+
+- Обновлён `apps/bot/src/payments/robokassa.ts`: `verifyResultSignature(outSum, invId, signature)` —
+  `md5(OutSum:InvId:Pass2)`, Receipt не участвует, сравнение case-insensitive.
+- Создан `apps/bot/src/services/subscription.ts`: `calculateNewExpiresAt` (активная подписка
+  `expiresAt > now` → `expiresAt + periodDays`; истекла/нет → `now + periodDays`);
+  `applyPayment(tx, payment, now, periodDays)` — внутри транзакции обновляет `User.expiresAt`,
+  `status = ACTIVE`, сбрасывает `reminderSentAt`/`lastMutedRemindAt`.
+- Создан `apps/bot/src/payments/webhook.ts`: `POST /robokassa/result` — zod-парсинг тела;
+  подпись проверяется до БД (невалидная → `400`); атомарный guard
+  `updateMany({ where: { id, status: PENDING }, data: { PAID, paidAt } })`; `count === 0` →
+  если уже `PAID` — `OK{InvId}` без изменений, иначе `400`; `count === 1` → в той же
+  `$transaction` читается `period_days` из `Setting`, вызывается `applyPayment`; ответ —
+  строго `OK{InvId}` plain text; `userId` в логах через `.toString()`.
+- Обновлён `apps/bot/src/index.ts`: Fastify + `@fastify/formbody`, регистрация webhook,
+  `Promise.all([fastify.listen, bot.start()])`.
+- Обновлён `apps/bot/src/config.ts`: zod-поле `PORT` (опционально, дефолт `3000`).
+- Обновлён `apps/bot/package.json`: зависимости `fastify`, `@fastify/formbody`; скрипт
+  `test:webhook` + `scripts/test-webhook.ts` для ручной проверки (валид/невалид/повтор).
+- Обновлён `.env.example`: `PORT=3000`.
+- Проверено: `npm run type-check -w apps/bot` — проходит.
+
+## 2026-07-05 — Task 3.2: Payment(PENDING) + реальная ссылка вместо заглушки
+
+- Обновлён `apps/bot/src/bot/keyboards.ts`: `paymentKeyboard(url)` принимает готовый URL;
+  `PAYMENT_PLACEHOLDER_URL` удалён.
+- Обновлён `apps/bot/src/bot/handlers/start.ts`: `handleSubscribeCallback` — на каждый клик
+  «Оформить подписку» параллельно читает `Setting` (`price`, `period_days`) без кэша;
+  `amount = formatOutSum(price)` один раз — тот же формат для `Payment.amount` и `OutSum`;
+  `prisma.payment.create({ status: PENDING, amount, userId })`, затем
+  `buildPaymentUrl(amount, payment.id, \`Подписка на ${periodDays} дней\`)`; кнопка «Оплатить»
+  ведёт на реальный URL Робокассы (`IsTest` из `ROBO_IS_TEST`). Каждый клик — новый `Payment`,
+  старые `PENDING` не переиспользуются.
+- Проверено: `npm run type-check -w apps/bot` — проходит.
+
+## 2026-07-04 — Task 3.1: Robokassa — чистые функции подписи + Receipt + buildPaymentUrl
+
+- Создан `apps/bot/src/payments/robokassa.ts`: `formatOutSum` (`toFixed(2)` для `OutSum` и
+  `items[].sum`); `buildReceipt` — одна каноническая JSON-строка (`sno`/`tax` из `config`,
+  `payment_object: "service"`, `sum` вставляется без `JSON.stringify`, чтобы не терять нули);
+  `buildSignature` — `md5(Login:OutSum:InvId:encodeURIComponent(receipt):Pass1)`; `buildPaymentUrl`
+  — полный URL `auth.robokassa.ru/Merchant/Index.aspx`, Receipt в параметре закодирован **дважды**,
+  `IsTest` → `"1"`/`"0"`. Только `config` + `node:crypto`, без Prisma/grammY.
+- Обновлён `apps/bot/src/config.ts`: zod-поля `ROBO_IS_TEST` (хелпер `booleanFromEnv`:
+  `true`/`false`/`1`/`0`), `ROBO_SNO`, `ROBO_TAX`.
+- Обновлён `.env.example`: `ROBO_IS_TEST`, `ROBO_SNO`, `ROBO_TAX` в блоке Robokassa.
+- Проверено: `npm run type-check -w apps/bot` — проходит.
+
 ## 2026-07-04 — Task 2.3: Middleware isAdmin + skeleton /admin
 
 - Создан `apps/bot/src/bot/middleware/isAdmin.ts`: middleware проверяет `ctx.from` (ранний отказ
