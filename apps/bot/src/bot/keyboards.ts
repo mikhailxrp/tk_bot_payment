@@ -2,15 +2,20 @@ import { InlineKeyboard } from 'grammy';
 
 export const SUBSCRIBE_CALLBACK = 'subscribe';
 export const COMMON_ACCESS_CALLBACK = 'common_access';
+export const RESEND_ACCESS_CALLBACK = 'resend_access';
 
-export function productChoiceKeyboard(showCommonAccessButton: boolean): InlineKeyboard {
+export type CommonAccessUiState = 'none' | 'paid_in_group' | 'paid_not_in_group';
+
+export function productChoiceKeyboard(commonAccessState: CommonAccessUiState): InlineKeyboard {
   const keyboard = new InlineKeyboard().text(
     'Закрытая группа (подписка)',
     SUBSCRIBE_CALLBACK,
   );
 
-  if (showCommonAccessButton) {
+  if (commonAccessState === 'none') {
     keyboard.row().text('Общая группа (разовый доступ)', COMMON_ACCESS_CALLBACK);
+  } else if (commonAccessState === 'paid_not_in_group') {
+    keyboard.row().text('Получить ссылку снова', RESEND_ACCESS_CALLBACK);
   }
 
   return keyboard;

@@ -5,7 +5,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type UpdateManyResult = { count: number };
 type PaymentRecord = { id: number; status: string };
-type PaymentWithUser = { id: number; userId: bigint; product: string };
+type PaymentWithUser = {
+  id: number;
+  userId: bigint;
+  product: string;
+  amount: { toString: () => string };
+};
+type UserUsernameRecord = { username: string | null };
 type SettingRecord = { value: string } | null;
 type UserRecord = { status: string; expiresAt: Date | null };
 
@@ -19,7 +25,7 @@ type MockTxClient = {
     findUnique: (args: unknown) => Promise<SettingRecord>;
   };
   user: {
-    findUniqueOrThrow: (args: unknown) => Promise<UserRecord>;
+    findUniqueOrThrow: (args: unknown) => Promise<UserRecord | UserUsernameRecord>;
     update: (args: unknown) => Promise<unknown>;
   };
   commonAccess: {
@@ -36,6 +42,10 @@ const {
   mockUserFindUniqueOrThrow,
   mockUserUpdate,
   mockCommonAccessUpsert,
+  mockCreateChatInviteLink,
+  mockSendMessage,
+  mockNotifyAdmins,
+  mockLoggerError,
 } = vi.hoisted(() => ({
   mockTransaction:
     vi.fn<(callback: (tx: MockTxClient) => Promise<unknown>) => Promise<unknown>>(),
@@ -43,9 +53,15 @@ const {
   mockFindUnique: vi.fn<(args: unknown) => Promise<PaymentRecord | null>>(),
   mockFindUniqueOrThrow: vi.fn<(args: unknown) => Promise<PaymentWithUser>>(),
   mockSettingFindUnique: vi.fn<(args: unknown) => Promise<SettingRecord>>(),
-  mockUserFindUniqueOrThrow: vi.fn<(args: unknown) => Promise<UserRecord>>(),
+  mockUserFindUniqueOrThrow:
+    vi.fn<(args: unknown) => Promise<UserRecord | UserUsernameRecord>>(),
   mockUserUpdate: vi.fn<(args: unknown) => Promise<unknown>>(),
   mockCommonAccessUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
+  mockCreateChatInviteLink:
+    vi.fn<(chatId: string, options: { member_limit: number }) => Promise<{ invite_link: string }>>(),
+  mockSendMessage: vi.fn<(chatId: string, text: string) => Promise<unknown>>(),
+  mockNotifyAdmins: vi.fn<(bot: unknown, text: string) => Promise<void>>(),
+  mockLoggerError: vi.fn<(obj: unknown, msg?: string) => void>(),
 }));
 
 vi.mock('@tg-bot/db', () => ({
@@ -64,6 +80,27 @@ vi.mock('@tg-bot/db', () => ({
   },
   prisma: {
     $transaction: mockTransaction,
+  },
+}));
+
+vi.mock('../src/bot/bot.js', () => ({
+  bot: {
+    api: {
+      createChatInviteLink: mockCreateChatInviteLink,
+      sendMessage: mockSendMessage,
+    },
+  },
+}));
+
+vi.mock('../src/services/notify.js', () => ({
+  notifyAdmins: mockNotifyAdmins,
+}));
+
+vi.mock('../src/logger.js', () => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: mockLoggerError,
   },
 }));
 
@@ -107,14 +144,26 @@ describe('POST /robokassa/result', () => {
       id: 42,
       userId: BigInt(1),
       product: 'SUBSCRIPTION',
+      amount: { toString: () => '500.00' },
     });
     mockSettingFindUnique.mockResolvedValue({ value: '30' });
-    mockUserFindUniqueOrThrow.mockResolvedValue({
-      status: 'ACTIVE',
-      expiresAt: null,
+    mockUserFindUniqueOrThrow.mockImplementation((args: unknown) => {
+      const select = (args as { select?: { username?: boolean; status?: boolean } }).select;
+      if (select?.username !== undefined) {
+        return Promise.resolve({ username: 'testuser' });
+      }
+      return Promise.resolve({
+        status: 'ACTIVE',
+        expiresAt: null,
+      });
     });
     mockUserUpdate.mockResolvedValue({});
     mockCommonAccessUpsert.mockResolvedValue({});
+    mockCreateChatInviteLink.mockResolvedValue({
+      invite_link: 'https://t.me/joinchat/test-invite',
+    });
+    mockSendMessage.mockResolvedValue({});
+    mockNotifyAdmins.mockResolvedValue(undefined);
 
     mockTransaction.mockImplementation((callback) =>
       callback({
@@ -155,6 +204,9 @@ describe('POST /robokassa/result', () => {
       data: { status: 'PAID', paidAt: expect.any(Date) as unknown },
     });
     expect(mockUserUpdate).toHaveBeenCalledOnce();
+    expect(mockCreateChatInviteLink).toHaveBeenCalledOnce();
+    expect(mockSendMessage).toHaveBeenCalledOnce();
+    expect(mockNotifyAdmins).toHaveBeenCalledOnce();
 
     await app.close();
   });
@@ -193,6 +245,9 @@ describe('POST /robokassa/result', () => {
     expect(response.body).toBe(`OK${invId}`);
     expect(mockUserUpdate).not.toHaveBeenCalled();
     expect(mockFindUniqueOrThrow).not.toHaveBeenCalled();
+    expect(mockCreateChatInviteLink).not.toHaveBeenCalled();
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockNotifyAdmins).not.toHaveBeenCalled();
 
     await app.close();
   });
@@ -202,6 +257,7 @@ describe('POST /robokassa/result', () => {
       id: 42,
       userId: BigInt(99),
       product: 'LIFETIME',
+      amount: { toString: () => '500.00' },
     });
 
     const app = await createTestApp();
@@ -223,6 +279,9 @@ describe('POST /robokassa/result', () => {
     });
     expect(mockUserUpdate).not.toHaveBeenCalled();
     expect(mockSettingFindUnique).not.toHaveBeenCalled();
+    expect(mockCreateChatInviteLink).toHaveBeenCalledOnce();
+    expect(mockSendMessage).toHaveBeenCalledOnce();
+    expect(mockNotifyAdmins).toHaveBeenCalledOnce();
 
     await app.close();
   });
@@ -246,6 +305,66 @@ describe('POST /robokassa/result', () => {
     expect(mockCommonAccessUpsert).not.toHaveBeenCalled();
     expect(mockUserUpdate).not.toHaveBeenCalled();
     expect(mockFindUniqueOrThrow).not.toHaveBeenCalled();
+    expect(mockCreateChatInviteLink).not.toHaveBeenCalled();
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockNotifyAdmins).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('still returns OK{InvId} and alerts admins when createChatInviteLink fails after commit', async () => {
+    mockCreateChatInviteLink.mockRejectedValue(new Error('telegram createChatInviteLink failed'));
+
+    const app = await createTestApp();
+    const outSum = '500.00';
+    const invId = 42;
+
+    const response = await postWebhook(app, {
+      OutSum: outSum,
+      InvId: String(invId),
+      SignatureValue: buildValidSignature(outSum, invId),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe(`OK${invId}`);
+    expect(mockUserUpdate).toHaveBeenCalledOnce();
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ invId }),
+      'robokassa webhook: failed to grant access after payment',
+    );
+    expect(mockNotifyAdmins).toHaveBeenCalledOnce();
+    const [, alertText] = mockNotifyAdmins.mock.calls[0] ?? [];
+    expect(alertText).toContain('Ошибка выдачи доступа');
+    expect(alertText).not.toContain('Оплата от');
+
+    await app.close();
+  });
+
+  it('still returns OK{InvId} and alerts admins when sendMessage fails after the invite link was created', async () => {
+    mockSendMessage.mockRejectedValue(new Error('telegram sendMessage failed'));
+
+    const app = await createTestApp();
+    const outSum = '500.00';
+    const invId = 42;
+
+    const response = await postWebhook(app, {
+      OutSum: outSum,
+      InvId: String(invId),
+      SignatureValue: buildValidSignature(outSum, invId),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe(`OK${invId}`);
+    expect(mockCreateChatInviteLink).toHaveBeenCalledOnce();
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ invId }),
+      'robokassa webhook: failed to grant access after payment',
+    );
+    expect(mockNotifyAdmins).toHaveBeenCalledOnce();
+    const [, alertText] = mockNotifyAdmins.mock.calls[0] ?? [];
+    expect(alertText).toContain('Ошибка выдачи доступа');
+    expect(alertText).not.toContain('Оплата от');
 
     await app.close();
   });

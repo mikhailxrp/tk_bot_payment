@@ -4,6 +4,116 @@
 
 ---
 
+## 2026-07-05 — Task 5.5: Тесты сквозного сценария (автотесты)
+
+- Обновлён `apps/bot/test/start.test.ts`: мок `services/subscription.js` (`resendCommonAccessInviteLink`);
+  тест кнопки «Получить ссылку снова» при `paid_not_in_group` (`inGroup=false`); блок
+  `describe('handleResendAccessCallback')` — 4 теста: нет `CommonAccess` / `inGroup=true` →
+  «уже активен», сервис не вызван; `inGroup=false` → вызов сервиса, `Payment` не создаётся;
+  сбой сервиса → сообщение об ошибке, без необработанного исключения.
+- Обновлён `apps/bot/test/subscription.test.ts`: `describe('grantAccessAfterPayment')` — SUBSCRIPTION
+  → `GROUP_ID`, текст «закрытую группу», `notifyAdmins` с «срок до»; LIFETIME → `COMMON_GROUP_ID`,
+  текст «общую группу», `notifyAdmins` с «бессрочный доступ»; `describe('resendCommonAccessInviteLink')`
+  — строго `COMMON_GROUP_ID`, текст без «Оплата прошла успешно»; `config` из реального `.env`.
+- Обновлён `apps/bot/test/webhook.test.ts`: два теста сбоя Telegram после коммита транзакции —
+  `createChatInviteLink` бросает ошибку и `sendMessage` бросает ошибку после успешного создания
+  ссылки; в обоих случаях ответ `OK{InvId}`, `logger.error`, `notifyAdmins` с алертом
+  «Ошибка выдачи доступа» (не с текстом об оплате).
+- Out of scope соблюдён: новая функциональность не добавлялась; `chatMember.test.ts` /
+  `notify.test.ts` не трогались.
+- Проверено: `npm test` — 52 passed; `npm run type-check`, `npm run lint` — без ошибок.
+  Task 5.5: автотесты ✅; осталась ручная проверка happy path в Telegram (обе группы).
+
+## 2026-07-05 — Task 5.4: Повторная выдача ссылки в общую группу без оплаты
+
+- Обновлён `apps/bot/src/bot/keyboards.ts`: константа `RESEND_ACCESS_CALLBACK`; тип
+  `CommonAccessUiState` (`'none' | 'paid_in_group' | 'paid_not_in_group'`); `productChoiceKeyboard`
+  — три состояния вместо `boolean`: без доступа — обе кнопки продукта; `inGroup=true` — только
+  «Закрытая группа»; `inGroup=false` — «Закрытая группа» + «Получить ссылку снова».
+- Обновлён `apps/bot/src/bot/handlers/start.ts`: `handleStart` читает `commonAccess.inGroup` и
+  вычисляет `CommonAccessUiState`; новый `handleResendAccessCallback` — `answerCallbackQuery`,
+  повторное чтение `CommonAccess` из БД (защита от race condition с `chat_member`), при
+  `inGroup=true` или отсутствии доступа — «Доступ в общую группу уже активен»; иначе вызов
+  `resendCommonAccessInviteLink`; ошибки Telegram API — `logger.error` + понятное сообщение
+  пользователю, без `Payment` и без необработанного исключения.
+- Обновлён `apps/bot/src/services/subscription.ts`: `resendCommonAccessInviteLink(userId)` —
+  `createChatInviteLink` в `config.COMMON_GROUP_ID` (`member_limit: 1`), отдельный текст
+  «Ваша ссылка для вступления…» (без «Оплата прошла успешно»); без `notifyAdmins`, без
+  `resolveGroupId` (группа жёстко `COMMON_GROUP_ID`).
+- Обновлён `apps/bot/src/bot/bot.ts`: регистрация
+  `bot.callbackQuery(RESEND_ACCESS_CALLBACK, handleResendAccessCallback)`.
+- Обновлён `apps/bot/test/start.test.ts`: мок `CommonAccess` с полем `inGroup: true` для
+  регрессионного теста «hides common access button…».
+- Out of scope соблюдён: повторная выдача для закрытой группы (решение #1), полный набор
+  автотестов resend/race/error (Task 5.5), отзыв старых invite-ссылок (решение #5).
+- Проверено: `npm test` — 41 passed; `npm run type-check` — без ошибок.
+  Task 5.4 ✅; следующий — Task 5.5 (сквозные тесты + ручная проверка).
+
+## 2026-07-05 — Task 5.3: `chat_member` — вступление/выход в обеих группах
+
+- Создан `apps/bot/src/bot/handlers/chatMember.ts`: `handleChatMemberUpdate(ctx)` — группа
+  определяется через `BigInt(ctx.chatMember.chat.id)` против `config.GROUP_ID`/`COMMON_GROUP_ID`;
+  неизвестный `chat.id` — тихий игнор. `new_chat_member.status` → `member` пишет `inGroup=true`,
+  `left`/`kicked` — `false`, остальные статусы (`restricted`, `administrator`, `creator`) не
+  трогают `inGroup` вовсе. `notifyAdmins` о вступлении вызывается только при переходе
+  `old_chat_member.status` (`left`/`kicked`) → `new_chat_member.status === 'member'` — обычный
+  `restricted → member` (будущий unmute Фаз 6–7) уведомления не генерирует.
+- Обновлён `apps/bot/src/services/subscription.ts`: `formatUserMention` экспортирована (была
+  приватной); добавлены `setUserInGroup(userId, inGroup)` и
+  `setCommonAccessInGroup(userId, inGroup)` — оба через `updateMany` (не `update`), чтобы
+  отсутствующая запись `User`/`CommonAccess` не роняла хендлер.
+- Обновлён `apps/bot/src/bot/bot.ts`: регистрация `bot.on('chat_member', handleChatMemberUpdate)`.
+- Обновлён `apps/bot/src/index.ts`: `bot.start({ allowed_updates: [...API_CONSTANTS.DEFAULT_UPDATE_TYPES, 'chat_member'] })`,
+  импорт `API_CONSTANTS` из `grammy`.
+- Создан `apps/bot/test/chatMember.test.ts`: 7 тестов — join в `GROUP_ID`/`COMMON_GROUP_ID`
+  (`left`/`kicked` → `member`), переход `restricted → member` без предшествующего
+  `left`/`kicked` (обновляет `inGroup`, но не уведомляет — сценарий будущего unmute),
+  `left`/`kicked` без уведомления, статус `restricted` полностью игнорируется, неизвестный
+  `chat.id`. Моки `services/subscription.js`, `services/notify.js`, `bot/bot.js` через `vi.mock`.
+- Out of scope соблюдён: `UserStatus.LEFT` как статус подписки, кик замьюченных, повторная
+  выдача invite-ссылки без оплаты (Task 5.4), полное покрытие сценариев (Task 5.5).
+- Проверено: `npm test` — 41 passed; `npm run type-check`, `npm run lint` — без ошибок;
+  `npm run build -w apps/bot` (`tsc`) — OK (полный `npm run build` упал на `prisma generate`
+  EPERM Windows — query engine занят другим процессом, к коду таска не относится).
+  Task 5.3 ✅; следующий — Task 5.4 (повторная выдача ссылки без оплаты).
+
+## 2026-07-05 — Task 5.2: Webhook — `freshlyProcessed` + выдача доступа после оплаты
+
+- Обновлён `apps/bot/src/payments/webhook.ts`: транзакция возвращает `freshlyProcessed`
+  (`true` только при первом `PENDING→PAID`, `false` при идемпотентном повторе по уже `PAID`);
+  после коммита — `grantAccessBestEffort()` только при `freshlyProcessed: true`; ошибки
+  Telegram в try/catch после транзакции — лог + алерт админам через `notifyAdmins`, ответ
+  webhook остаётся `OK{InvId}`.
+- Обновлён `apps/bot/src/services/subscription.ts`: `applyPayment` возвращает `expiresAt`;
+  новая `grantAccessAfterPayment()` — `resolveGroupId()` (`SUBSCRIPTION` → `GROUP_ID`,
+  `LIFETIME` → `COMMON_GROUP_ID`), `createChatInviteLink({ member_limit: 1 })`, разовый
+  `sendMessage` пользователю, `notifyAdmins` с текстом по продукту (решение #6: «срок до …» /
+  «бессрочный доступ в общую группу»); все BigInt → `.toString()` перед Telegram API.
+- `apps/bot/src/bot/bot.ts` без изменений — webhook/subscription импортируют синглтон `bot`
+  напрямую; `registerRobokassaWebhook` и `index.ts` не трогались.
+- Обновлён `apps/bot/test/webhook.test.ts`: моки `bot/bot.ts` (`createChatInviteLink`,
+  `sendMessage`) и `notify.ts` (`notifyAdmins`); мок `user.findUniqueOrThrow` для `username`;
+  проверки вызова/не-вызова Telegram при первичной оплате и идемпотентном повторе.
+- Out of scope соблюдён: `chat_member` (Task 5.3), повторная выдача без оплаты (Task 5.4),
+  полное покрытие новых веток и сценарий ошибки Telegram (Task 5.5).
+- Проверено: `npm test` — 34 passed; `npm run type-check`, `npm run lint` — без ошибок.
+  Task 5.2 ✅; следующий — Task 5.3 (`chat_member`).
+
+## 2026-07-05 — Task 5.1: `services/notify.ts` — рассылка админам с троттлингом
+
+- Создан `apps/bot/src/services/notify.ts`: `sendThrottledTextMessages(bot, chatIds, text, options?)`
+  — последовательная отправка с интервалом 40 ms (≤25 msg/sec), `bigint` → `.toString()` перед
+  `sendMessage` и логами; `try/catch` на каждого получателя (`GrammyError`, `HttpError`, прочие) —
+  ошибка логируется, рассылка продолжается; инъекция `delay` для тестов. `notifyAdmins(bot, text)` —
+  `prisma.admin.findMany`, затем вызов примитива; пустой список админов не падает.
+- Создан `apps/bot/test/notify.test.ts`: 8 тестов — рассылка по chatId, троттлинг (26 получателей →
+  25 пауз без реального ожидания), пустой массив, 403/400 `GrammyError` и `HttpError` без
+  прерывания, `notifyAdmins` и пустая таблица; моки `bot.api.sendMessage`, Prisma, logger.
+- Out of scope соблюдён: вызов `notifyAdmins` из webhook (Task 5.2), рассылка пользователям
+  (Фаза 7), retry.
+- Проверено: `npm test` — 34 passed; `npm run type-check -w apps/bot` — без ошибок.
+  Task 5.1 ✅; следующий — Task 5.2 (webhook + выдача доступа).
+
 ## 2026-07-05 — Task 4.3: Webhook — ветвление по продукту + тесты
 
 - Обновлён `apps/bot/src/payments/webhook.ts`: после `payment.findUniqueOrThrow` ветвление по

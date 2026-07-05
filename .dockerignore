@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+dist
+**/dist
+build
+.next
+*.tsbuildinfo
+*.log
+coverage
+.git
+.env
+.env.local
+.env.*.local
+apps/admin

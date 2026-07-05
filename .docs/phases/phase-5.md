@@ -2,7 +2,7 @@
 
 ## Статус
 
-🔄 В работе | Начата: 2026-07-05 | Ветка: `phase-5`
+🔄 В работе | Начата: 2026-07-05 | Ветка: `phase-5` | Таски 5.1–5.4 ✅, 5.5 автотесты ✅, ручная проверка ожидает
 
 ## Цель
 
@@ -56,7 +56,7 @@
 
 ### Task 5.1 — `services/notify.ts`: рассылка админам с троттлингом
 
-- **Статус:** 🔄 В работе (детальный таск — в `TASK.md`)
+- **Статус:** ✅ Готово (2026-07-05)
 - **Workspace:** bot
 - **Цель:** переиспользуемый механизм рассылки: троттлинг ≤25 msg/sec, ошибки одного получателя
   (403 и другие) логируются и не прерывают рассылку остальным; готов для уведомления об оплате
@@ -68,7 +68,7 @@
 
 ### Task 5.2 — Webhook: `freshlyProcessed` + выдача доступа после оплаты
 
-- **Статус:** ⏳ Ожидает
+- **Статус:** ✅ Готово (2026-07-05)
 - **Workspace:** bot
 - **Цель:** транзакция webhook возвращает `freshlyProcessed`; после коммита (только если
   `true`, best-effort) — создание одноразовой invite-ссылки в группу по продукту платежа,
@@ -78,18 +78,18 @@
   к `bot.api` из webhook-модуля)
 - **Out of scope:** `chat_member`-хендлер (Task 5.3), повторная выдача без оплаты (Task 5.4)
 - **DoD:**
-  - [ ] повторный POST по уже `PAID` платежу → `freshlyProcessed: false`, ссылка/уведомления не
+  - [x] повторный POST по уже `PAID` платежу → `freshlyProcessed: false`, ссылка/уведомления не
         повторяются
-  - [ ] первичная оплата `SUBSCRIPTION` → invite-ссылка (`member_limit:1`) в `GROUP_ID`,
+  - [x] первичная оплата `SUBSCRIPTION` → invite-ссылка (`member_limit:1`) в `GROUP_ID`,
         отправлена пользователю, `notifyAdmins` с текстом «срок до …»
-  - [ ] первичная оплата `LIFETIME` → invite-ссылка в `COMMON_GROUP_ID`, `notifyAdmins` с
+  - [x] первичная оплата `LIFETIME` → invite-ссылка в `COMMON_GROUP_ID`, `notifyAdmins` с
         текстом «бессрочный доступ»
-  - [ ] сбой Telegram-вызова (invite-ссылка/отправка) логируется, не влияет на уже отданный
+  - [x] сбой Telegram-вызова (invite-ссылка/отправка) логируется, не влияет на уже отданный
         `OK{InvId}`, дублирующий алерт админам уходит
 
 ### Task 5.3 — `chat_member`: вступление/выход в обеих группах
 
-- **Статус:** ⏳ Ожидает
+- **Статус:** ✅ Готово (2026-07-05)
 - **Workspace:** bot
 - **Цель:** хендлер различает группу по `chat.id` и обновляет `inGroup` (`User` для закрытой,
   `CommonAccess` для общей) на join и left/kicked, не трогая `User.status`; join —
@@ -99,47 +99,60 @@
   `apps/bot/src/services/subscription.ts` (хелперы обновления `inGroup`)
 - **Out of scope:** обработка `UserStatus.LEFT`, кик замьюченных
 - **DoD:**
-  - [ ] join в `GROUP_ID` → `User.inGroup=true`, `status` не изменён; `notifyAdmins`
-        (вступление, закрытая группа)
-  - [ ] join в `COMMON_GROUP_ID` → `CommonAccess.inGroup=true`; `notifyAdmins` (вступление,
-        общая группа)
-  - [ ] left/kicked в любой из групп → соответствующий `inGroup=false`
-  - [ ] апдейт с неизвестным `chat.id` игнорируется без падения
-  - [ ] `bot.start()` явно передаёт `allowed_updates` с `chat_member`
+  - [x] join в `GROUP_ID` (переход `left`/`kicked` → `member`) → `User.inGroup=true`, `status` не
+        изменён; `notifyAdmins` (вступление, закрытая группа)
+  - [x] join в `COMMON_GROUP_ID` (тот же переход) → `CommonAccess.inGroup=true`; `notifyAdmins`
+        (вступление, общая группа)
+  - [x] переход в `member` без предшествующего `left`/`kicked` (например, `restricted` → `member`
+        при unmute) → `inGroup=true` обновляется, но `notifyAdmins` не вызывается
+  - [x] `left`/`kicked` в любой из групп → соответствующий `inGroup=false`, без уведомления
+  - [x] апдейт с неизвестным `chat.id` игнорируется без падения
+  - [x] `bot.start()` явно передаёт `allowed_updates` с `chat_member` (через
+        `API_CONSTANTS.DEFAULT_UPDATE_TYPES`)
 
 ### Task 5.4 — Повторная выдача ссылки в общую группу без оплаты
 
-- **Статус:** ⏳ Ожидает
+- **Статус:** ✅ Готово (2026-07-05)
 - **Workspace:** bot
 - **Цель:** `/start` для пользователя с `CommonAccess` и `inGroup=false` показывает кнопку
   «Получить ссылку снова»; клик создаёт новую одноразовую ссылку в `COMMON_GROUP_ID` без
   создания `Payment` (решение #1).
-- **Файлы:** `apps/bot/src/bot/handlers/start.ts`, `apps/bot/src/bot/keyboards.ts`
+- **Файлы:** `apps/bot/src/bot/handlers/start.ts`, `apps/bot/src/bot/keyboards.ts`,
+  `apps/bot/src/services/subscription.ts`, `apps/bot/src/bot/bot.ts`, `apps/bot/test/start.test.ts`
 - **Out of scope:** аналогичный флоу для закрытой группы (его нет — решение #1)
 - **DoD:**
-  - [ ] `CommonAccess` + `inGroup=true` → только сообщение «доступ уже оплачен», без кнопки
+  - [x] `CommonAccess` + `inGroup=true` → только сообщение «доступ уже оплачен», без кнопки
         (регрессия текущего поведения отсутствует)
-  - [ ] `CommonAccess` + `inGroup=false` → кнопка «Получить ссылку снова» есть; клик выдаёт
+  - [x] `CommonAccess` + `inGroup=false` → кнопка «Получить ссылку снова» есть; клик выдаёт
         новую одноразовую ссылку, `Payment` не создаётся
-  - [ ] пользователь без `CommonAccess` — поведение как в Фазе 4, без изменений
+  - [x] пользователь без `CommonAccess` — поведение как в Фазе 4, без изменений
+  - [x] повторный клик при `inGroup=true` на момент клика — «доступ уже активен», ссылка не
+        создаётся (race condition)
+  - [x] сбой Telegram API — лог + сообщение пользователю, без необработанного исключения
 
 ### Task 5.5 — Тесты сквозного сценария + ручная проверка
 
-- **Статус:** ⏳ Ожидает
+- **Статус:** ✅ Готово — автотесты ✅ (2026-07-05), ручная проверка ожидает
 - **Workspace:** bot
 - **Цель:** автотесты на весь новый функционал (Task 5.2–5.4) + ручная проверка полного happy
   path в Telegram (DoD фазы).
 - **Файлы:** `apps/bot/test/webhook.test.ts`, `apps/bot/test/subscription.test.ts`,
-  `apps/bot/test/chatMember.test.ts` (новый), `apps/bot/test/start.test.ts`
-- **Out of scope:** e2e с реальной Робокассой (уже покрыто ручной проверкой Фазы 3)
+  `apps/bot/test/start.test.ts`
+- **Out of scope:** e2e с реальной Робокассой (уже покрыто ручной проверкой Фазы 3);
+  `chatMember.test.ts` / `notify.test.ts` — уже покрывают DoD своих тасков
 - **DoD:**
-  - [ ] тесты: `freshlyProcessed` и идемпотентность вызовов ссылки/notify (webhook), выдача
-        ссылки по продукту (subscription), join/leave для обеих групп (chat_member),
-        видимость кнопки повторной выдачи (start)
+  - [x] `start.test.ts`: кнопка «Получить ссылку снова» при `paid_not_in_group`
+  - [x] `start.test.ts`: `handleResendAccessCallback` — нет доступа / `inGroup=true` / `inGroup=false` /
+        сбой сервиса
+  - [x] `subscription.test.ts`: `grantAccessAfterPayment` — SUBSCRIPTION и LIFETIME
+  - [x] `subscription.test.ts`: `resendCommonAccessInviteLink` — `COMMON_GROUP_ID`, текст без «Оплата
+        прошла успешно»
+  - [x] `webhook.test.ts`: сбой `createChatInviteLink` и `sendMessage` после коммита → `OK{InvId}`,
+        лог + алерт админам
   - [ ] ручная проверка: `/start` → оплата (тест, `IsTest=1`) → ссылка → вступил → админам
         пришли 2 уведомления (оплата + вступление); повторное использование ссылки Telegram
-        отклоняет
-  - [ ] `npm test`, `npm run type-check`, `npm run lint` — чисто
+        отклоняет — для обеих групп
+  - [x] `npm test`, `npm run type-check`, `npm run lint` — чисто
 
 ## DoD фазы (из phases.md)
 
