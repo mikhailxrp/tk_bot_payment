@@ -3,7 +3,10 @@ import type { Context } from 'grammy';
 
 import { logger } from '../../logger.js';
 import { buildPaymentUrl, formatOutSum } from '../../payments/robokassa.js';
-import { resendCommonAccessInviteLink } from '../../services/subscription.js';
+import {
+  createSubscriptionPaymentLink,
+  resendCommonAccessInviteLink,
+} from '../../services/subscription.js';
 import {
   type CommonAccessUiState,
   paymentKeyboard,
@@ -37,7 +40,6 @@ const RESEND_LINK_ERROR_MESSAGE =
 const COMMON_ACCESS_DESCRIPTION = 'Разовый доступ в общую группу';
 
 const PRICE_PATTERN = /^\d+(\.\d{1,2})?$/;
-const PERIOD_DAYS_PATTERN = /^\d+$/;
 
 function formatSubscriptionMessage(amount: string): string {
   return `Стоимость подписки: ${amount} ₽\n\nНажмите «Оплатить» для продолжения.`;
@@ -107,39 +109,15 @@ export async function handleSubscribeCallback(ctx: Context): Promise<void> {
     return;
   }
 
-  const [priceSetting, periodDaysSetting] = await Promise.all([
-    prisma.setting.findUnique({ where: { key: 'price' } }),
-    prisma.setting.findUnique({ where: { key: 'period_days' } }),
-  ]);
-
-  const price = priceSetting?.value;
-  const periodDays = periodDaysSetting?.value;
-  if (
-    !price ||
-    !PRICE_PATTERN.test(price) ||
-    !periodDays ||
-    !PERIOD_DAYS_PATTERN.test(periodDays) ||
-    Number(periodDays) <= 0
-  ) {
+  const userId = BigInt(from.id);
+  const link = await createSubscriptionPaymentLink(userId);
+  if (!link) {
     await ctx.reply(PRICE_UNAVAILABLE_MESSAGE);
     return;
   }
 
-  const amount = formatOutSum(price);
-  const userId = BigInt(from.id);
-
-  const payment = await prisma.payment.create({
-    data: {
-      userId,
-      amount,
-      status: PaymentStatus.PENDING,
-    },
-  });
-
-  const description = `Подписка на ${periodDays} дней`;
-  const paymentUrl = buildPaymentUrl(amount, payment.id, description);
-  const text = formatSubscriptionMessage(amount);
-  const keyboard = paymentKeyboard(paymentUrl);
+  const text = formatSubscriptionMessage(link.amount);
+  const keyboard = paymentKeyboard(link.paymentUrl);
 
   if (ctx.callbackQuery?.message) {
     await ctx.editMessageText(text, { reply_markup: keyboard });
