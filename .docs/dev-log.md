@@ -4,6 +4,33 @@
 
 ---
 
+## 2026-07-06 — Task 6.1: `jobs/dailyCheck.ts` — mute истёкших + оплата + сводка админам
+
+- Создан `apps/bot/src/jobs/dailyCheck.ts`: `runDailyCheck()` — `GET_LOCK('daily_check', 0)` /
+  `RELEASE_LOCK` в одном `prisma.$transaction` (`finally` на release); выборка `User` где
+  `status=ACTIVE AND expiresAt <= now`; per-user цикл с атомарным guard через
+  `muteExpiredUser`; личное сообщение «Подписка истекла…» + `paymentKeyboard` на новый
+  `Payment(PENDING, SUBSCRIPTION)`; `notifyAdmins` со сводкой «замьючено N» + `formatUserMention`
+  — всегда, включая `N=0`; при `GET_LOCK=0` — `logger.warn` и выход без обработки.
+- Обновлён `apps/bot/src/services/subscription.ts`: `createSubscriptionPaymentLink(userId)` —
+  чтение `Setting` (`price`, `period_days` без кэша), `Payment.create` + `buildPaymentUrl`;
+  `muteExpiredUser(tx, userId, now)` — `updateMany` guard (`ACTIVE` + `expiresAt <= now` →
+  `MUTED`/`mutedAt`), best-effort `restrictChatMember` без `until_date` (`Number(userId)` для
+  `user_id`); ошибка Telegram логируется, возврат `true` если guard сработал.
+- Обновлён `apps/bot/src/bot/handlers/start.ts`: `handleSubscribeCallback` переключён на
+  `createSubscriptionPaymentLink` — поведение и тексты без изменений.
+- Создан `apps/bot/test/dailyCheck.test.ts`: 10 тестов — mute + сообщение + сводка; граница
+  `expiresAt === now` / `now + 1с`; CommonAccess-only не трогается; идемпотентность для `MUTED`;
+  сводка при `N=0`; сбой `restrictChatMember`/`sendMessage` на одном юзере не прерывает цикл;
+  конкурентный `GET_LOCK=0`; `RELEASE_LOCK` при ошибке внутри транзакции.
+- Обновлён `apps/bot/test/subscription.test.ts`: `describe('createSubscriptionPaymentLink')` и
+  `describe('muteExpiredUser')` — guard, restrict, возврат `false` при `count !== 1`.
+- Обновлён `apps/bot/test/start.test.ts`: мок `createSubscriptionPaymentLink` вместо прямых
+  `prisma.payment.create`/`buildPaymentUrl` — сценарии успеха/недоступной цены сохранены.
+- Out of scope соблюдён: напоминания (Фаза 7), unmute при оплате (Task 6.2), cron и `/admin`
+  (Task 6.3), миграция Prisma не нужна.
+- Проверено: `npm test` — 68 passed; DoD Task 6.1 ✅; следующий — Task 6.2 (unmute при оплате).
+
 ## 2026-07-05 — Task 5.5: Тесты сквозного сценария (автотесты)
 
 - Обновлён `apps/bot/test/start.test.ts`: мок `services/subscription.js` (`resendCommonAccessInviteLink`);

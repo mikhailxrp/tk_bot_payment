@@ -2,7 +2,7 @@
 
 ## Статус
 
-🔄 В работе | Начата: 2026-07-06 | Ветка: `phase-6`
+🔄 В работе | Начата: 2026-07-06 | Ветка: `phase-6` | Task 6.1 ✅, 6.2–6.4 ⏳
 
 ## Цель
 
@@ -175,4 +175,11 @@
 
 ## Итоги
 
-_(заполняется при закрытии: что отклонилось от плана, тех. долг, дата, PR)_
+- **2026-07-06 — Task 6.1 ✅:** граница мьюта — `expiresAt <= now` (`lte`), не строгое `<` (DoD
+  требует мьютить при `expiresAt === now`). `handleSubscribeCallback` →
+  `createSubscriptionPaymentLink`; адаптация мока в `start.test.ts` неизбежна при `vi.mock` всего
+  модуля `subscription.js`. `muteExpiredUser` возвращает `true` после успешного DB-guard даже при
+  сбое `restrictChatMember` — пользователь учитывается в сводке, сообщение с оплатой всё равно
+  отправляется. `restrictChatMember`: `user_id` — `number` (`Number(userId)`), не `.toString()`.
+
+_(остальное — при закрытии фазы: тех. долг, дата, PR)_

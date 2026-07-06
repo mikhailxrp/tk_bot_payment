@@ -12,25 +12,32 @@ type UserUpdateManyArgs = {
 const {
   mockCreateChatInviteLink,
   mockSendMessage,
+  mockGetChat,
   mockRestrictChatMember,
   mockNotifyAdmins,
   mockSettingFindUnique,
   mockPaymentCreate,
+  mockLoggerError,
 } = vi.hoisted(() => ({
   mockCreateChatInviteLink:
     vi.fn<(chatId: string, options: { member_limit: number }) => Promise<{ invite_link: string }>>(),
   mockSendMessage: vi.fn<(chatId: string, text: string) => Promise<unknown>>(),
+  mockGetChat:
+    vi.fn<
+      (chatId: string) => Promise<{ permissions: Record<string, boolean> }>
+    >(),
   mockRestrictChatMember:
     vi.fn<
       (
         chatId: string,
         userId: number,
-        permissions: { can_send_messages: boolean },
+        permissions: Record<string, boolean>,
       ) => Promise<unknown>
     >(),
   mockNotifyAdmins: vi.fn<(bot: unknown, text: string) => Promise<void>>(),
   mockSettingFindUnique: vi.fn<(args: SettingFindArgs) => Promise<SettingRecord>>(),
   mockPaymentCreate: vi.fn<(args: PaymentCreateArgs) => Promise<{ id: number }>>(),
+  mockLoggerError: vi.fn<(obj: unknown, msg?: string) => void>(),
 }));
 
 vi.mock('../src/bot/bot.js', () => ({
@@ -38,6 +45,7 @@ vi.mock('../src/bot/bot.js', () => ({
     api: {
       createChatInviteLink: mockCreateChatInviteLink,
       sendMessage: mockSendMessage,
+      getChat: mockGetChat,
       restrictChatMember: mockRestrictChatMember,
     },
   },
@@ -48,7 +56,7 @@ vi.mock('../src/services/notify.js', () => ({
 }));
 
 vi.mock('../src/logger.js', () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  logger: { info: vi.fn(), warn: vi.fn(), error: mockLoggerError },
 }));
 
 vi.mock('@tg-bot/db', () => ({
@@ -63,11 +71,13 @@ vi.mock('@tg-bot/db', () => ({
 
 import { config } from '../src/config.js';
 import {
+  applyPayment,
   calculateNewExpiresAt,
   createSubscriptionPaymentLink,
   grantAccessAfterPayment,
   muteExpiredUser,
   resendCommonAccessInviteLink,
+  unmuteUserAfterPayment,
 } from '../src/services/subscription.js';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -144,6 +154,7 @@ describe('grantAccessAfterPayment', () => {
       amount: '990.00',
       username: 'testuser',
       expiresAt,
+      wasMuted: false,
     });
 
     expect(mockCreateChatInviteLink).toHaveBeenCalledWith(config.GROUP_ID.toString(), {
@@ -163,6 +174,7 @@ describe('grantAccessAfterPayment', () => {
       product: ProductType.LIFETIME,
       amount: '500.00',
       username: 'testuser',
+      wasMuted: false,
     });
 
     expect(mockCreateChatInviteLink).toHaveBeenCalledWith(
@@ -328,5 +340,113 @@ describe('muteExpiredUser', () => {
     );
 
     expect(result).toBe(true);
+  });
+});
+
+describe('applyPayment', () => {
+  const now = new Date('2026-01-15T12:00:00.000Z');
+  const TEST_USER_ID = BigInt(444555666);
+  const payment = {
+    id: 1,
+    userId: TEST_USER_ID,
+    amount: '990.00',
+    status: 'PENDING',
+    product: ProductType.SUBSCRIPTION,
+  };
+
+  function createTx(user: { status: string; expiresAt: Date | null }) {
+    const findUniqueOrThrow = vi.fn().mockResolvedValue(user);
+    const update = vi.fn().mockResolvedValue({});
+    return {
+      user: { findUniqueOrThrow, update },
+    };
+  }
+
+  it('returns wasMuted=true when user status was MUTED before update', async () => {
+    const tx = createTx({ status: UserStatus.MUTED, expiresAt: new Date('2026-01-01T12:00:00.000Z') });
+
+    const result = await applyPayment(
+      tx as unknown as Parameters<typeof applyPayment>[0],
+      payment as Parameters<typeof applyPayment>[1],
+      now,
+      PERIOD_DAYS,
+    );
+
+    expect(result.wasMuted).toBe(true);
+    expect(result.expiresAt.getTime()).toBe(now.getTime() + PERIOD_DAYS * MS_PER_DAY);
+    expect(tx.user.update).toHaveBeenCalledWith({
+      where: { id: TEST_USER_ID },
+      data: {
+        expiresAt: result.expiresAt,
+        status: UserStatus.ACTIVE,
+        reminderSentAt: null,
+        lastMutedRemindAt: null,
+      },
+    });
+  });
+
+  it('returns wasMuted=false when user status was ACTIVE before update', async () => {
+    const tx = createTx({ status: UserStatus.ACTIVE, expiresAt: null });
+
+    const result = await applyPayment(
+      tx as unknown as Parameters<typeof applyPayment>[0],
+      payment as Parameters<typeof applyPayment>[1],
+      now,
+      PERIOD_DAYS,
+    );
+
+    expect(result.wasMuted).toBe(false);
+  });
+
+  it('returns wasMuted=false when user status was NEW before update', async () => {
+    const tx = createTx({ status: UserStatus.NEW, expiresAt: null });
+
+    const result = await applyPayment(
+      tx as unknown as Parameters<typeof applyPayment>[0],
+      payment as Parameters<typeof applyPayment>[1],
+      now,
+      PERIOD_DAYS,
+    );
+
+    expect(result.wasMuted).toBe(false);
+  });
+});
+
+describe('unmuteUserAfterPayment', () => {
+  const TEST_USER_ID = BigInt(777888999);
+  const groupPermissions = {
+    can_send_messages: true,
+    can_send_audios: true,
+    can_send_documents: true,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetChat.mockResolvedValue({ permissions: groupPermissions });
+    mockRestrictChatMember.mockResolvedValue({});
+  });
+
+  it('calls getChat and restrictChatMember with group permissions', async () => {
+    const result = await unmuteUserAfterPayment(TEST_USER_ID);
+
+    expect(result).toBe(true);
+    expect(mockGetChat).toHaveBeenCalledWith(config.GROUP_ID.toString());
+    expect(mockRestrictChatMember).toHaveBeenCalledWith(
+      config.GROUP_ID.toString(),
+      Number(TEST_USER_ID),
+      groupPermissions,
+    );
+  });
+
+  it('logs error and returns false when restrictChatMember fails', async () => {
+    mockRestrictChatMember.mockRejectedValue(new Error('telegram restrictChatMember failed'));
+
+    const result = await unmuteUserAfterPayment(TEST_USER_ID);
+
+    expect(result).toBe(false);
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: TEST_USER_ID.toString() }),
+      'payment: failed to unmute user after payment',
+    );
   });
 });
