@@ -4,6 +4,32 @@
 
 ---
 
+## 2026-07-06 — TASK.md (Task 6.4): ревью автотестов, контрольный прогон, чеклист ручной проверки
+
+**Фаза:** 6 — Ежедневный cron: mute истёкших. **Таск:** 6.4 «Тесты + ручная проверка».
+
+**Что сделано (автоматическая часть):**
+
+- Ревью пяти тестовых файлов против DoD фазы 6 и `dod-global.md` (разделы Cron/конкурентность,
+  Telegram API): `dailyCheck.test.ts`, `scheduler.test.ts`, `admin.test.ts`, `subscription.test.ts`,
+  `webhook.test.ts`. **Пробелов нет** — production-код и тесты не менялись.
+- Контрольный прогон из корня: `npm test` 94/94, `npm run type-check`, `npm run lint` — чисто.
+- Сверка `dod-global.md`: `Europe/Moscow`, `GET_LOCK`/`RELEASE_LOCK`, atomic `updateMany`,
+  mute/unmute без `banChatMember`, 403 в `notify.ts` — покрыты; граничные даты напоминаний
+  (3/9/10/20 дней) — Фаза 7, вне скоупа.
+- Подготовлен чеклист ручной проверки (3 сценария): mute → оплата → unmute через `/admin` +
+  `test-webhook.ts`; CommonAccess-only не затрагивается; смена `Setting.cron_time` без рестарта
+  бота.
+- Обновлена документация: `TASK.md` (DoD автоматической части ✅), `phase-6.md`, `_status.md`.
+
+**Остаётся (ручная часть DoD, выполняет пользователь):**
+
+- `expiresAt` в прошлое → «🔄 Проверить подписки» → mute + сообщение с оплатой → webhook → unmute.
+- Пользователь только с `CommonAccess` не затрагивается при ручном/cron-запуске.
+- Смена `cron_time` в Prisma Studio подхватывается планировщиком на живом процессе.
+
+**Статус:** Task 6.4 — автотесты/ревью ✅, ручная проверка ⏳. Фаза 6 — 🔄 в работе.
+
 ## 2026-07-06 — Task 6.3: Планировщик (node-cron) + `/admin`: проверка, сводка, ссылка на панель
 
 - Добавлены зависимости `node-cron`, `@types/node-cron` в `apps/bot/package.json`.
