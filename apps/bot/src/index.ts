@@ -4,6 +4,7 @@ import { API_CONSTANTS } from 'grammy';
 
 import { bot } from './bot/bot.js';
 import { config } from './config.js';
+import { startScheduler } from './jobs/scheduler.js';
 import { logger } from './logger.js';
 import { registerRobokassaWebhook } from './payments/webhook.js';
 
@@ -20,6 +21,8 @@ registerRobokassaWebhook(fastify);
 bot.catch((err) => {
   logger.error({ err: err.error }, 'bot error');
 });
+
+startScheduler();
 
 await Promise.all([
   fastify.listen({ port: config.PORT, host: '0.0.0.0' }).then(() => {

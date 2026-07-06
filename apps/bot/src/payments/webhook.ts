@@ -10,6 +10,7 @@ import {
   applyCommonAccess,
   applyPayment,
   grantAccessAfterPayment,
+  unmuteUserAfterPayment,
   type GrantAccessAfterPaymentParams,
 } from '../services/subscription.js';
 import { verifyResultSignature } from './robokassa.js';
@@ -61,6 +62,34 @@ async function grantAccessBestEffort(result: WebhookOkResult): Promise<void> {
       logger.error(
         { err: alertErr, invId: result.invId },
         'robokassa webhook: failed to notify admins about grant access error',
+      );
+    }
+  }
+
+  if (
+    result.access.product === ProductType.SUBSCRIPTION &&
+    result.access.wasMuted
+  ) {
+    try {
+      const unmuted = await unmuteUserAfterPayment(result.access.userId);
+      if (!unmuted) {
+        logger.error(
+          {
+            invId: result.invId,
+            userId: result.access.userId.toString(),
+          },
+          'robokassa webhook: failed to unmute user after payment',
+        );
+
+        await notifyAdmins(
+          bot,
+          `⚠️ Ошибка unmute после оплаты (InvId ${result.invId}). Проверьте вручную.`,
+        );
+      }
+    } catch (alertErr) {
+      logger.error(
+        { err: alertErr, invId: result.invId },
+        'robokassa webhook: failed to notify admins about unmute error',
       );
     }
   }
@@ -140,7 +169,7 @@ export function registerRobokassaWebhook(fastify: FastifyInstance): void {
             kind: 'ok' as const,
             invId: InvId,
             freshlyProcessed: true,
-            access: accessBase,
+            access: { ...accessBase, wasMuted: false },
           };
         }
 
@@ -157,7 +186,7 @@ export function registerRobokassaWebhook(fastify: FastifyInstance): void {
         }
         const periodDays = Number(periodDaysRaw);
 
-        const expiresAt = await applyPayment(tx, payment, now, periodDays);
+        const { expiresAt, wasMuted } = await applyPayment(tx, payment, now, periodDays);
 
         logger.info(
           {
@@ -172,7 +201,7 @@ export function registerRobokassaWebhook(fastify: FastifyInstance): void {
           kind: 'ok' as const,
           invId: InvId,
           freshlyProcessed: true,
-          access: { ...accessBase, expiresAt },
+          access: { ...accessBase, expiresAt, wasMuted },
         };
       });
     } catch (err) {

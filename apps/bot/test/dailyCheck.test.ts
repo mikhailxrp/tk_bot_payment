@@ -201,8 +201,9 @@ describe('runDailyCheck', () => {
     });
     fixtureState.users = [user];
 
-    await runDailyCheck();
+    const result = await runDailyCheck();
 
+    expect(result).toEqual({ ranNow: true });
     expect(user.status).toBe('MUTED');
     expect(user.mutedAt?.getTime()).toBe(NOW.getTime());
     expect(mockRestrictChatMember).toHaveBeenCalledWith(
@@ -337,9 +338,10 @@ describe('runDailyCheck', () => {
     const user = makeUser({ id: BigInt(10), expiresAt: new Date(NOW.getTime() - 1000) });
     fixtureState.users = [user];
 
-    const [, second] = await Promise.all([runDailyCheck(), runDailyCheck()]);
+    const [first, second] = await Promise.all([runDailyCheck(), runDailyCheck()]);
 
-    expect(second).toBeUndefined();
+    expect(first).toEqual({ ranNow: true });
+    expect(second).toEqual({ ranNow: false });
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       expect.objectContaining({ lockName: 'daily_check' }),
       expect.stringContaining('lock not acquired'),

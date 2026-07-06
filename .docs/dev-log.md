@@ -4,6 +4,114 @@
 
 ---
 
+## 2026-07-06 — TASK.md (Task 6.4): ревью автотестов, контрольный прогон, чеклист ручной проверки
+
+**Фаза:** 6 — Ежедневный cron: mute истёкших. **Таск:** 6.4 «Тесты + ручная проверка».
+
+**Что сделано (автоматическая часть):**
+
+- Ревью пяти тестовых файлов против DoD фазы 6 и `dod-global.md` (разделы Cron/конкурентность,
+  Telegram API): `dailyCheck.test.ts`, `scheduler.test.ts`, `admin.test.ts`, `subscription.test.ts`,
+  `webhook.test.ts`. **Пробелов нет** — production-код и тесты не менялись.
+- Контрольный прогон из корня: `npm test` 94/94, `npm run type-check`, `npm run lint` — чисто.
+- Сверка `dod-global.md`: `Europe/Moscow`, `GET_LOCK`/`RELEASE_LOCK`, atomic `updateMany`,
+  mute/unmute без `banChatMember`, 403 в `notify.ts` — покрыты; граничные даты напоминаний
+  (3/9/10/20 дней) — Фаза 7, вне скоупа.
+- Подготовлен чеклист ручной проверки (3 сценария): mute → оплата → unmute через `/admin` +
+  `test-webhook.ts`; CommonAccess-only не затрагивается; смена `Setting.cron_time` без рестарта
+  бота.
+- Обновлена документация: `TASK.md` (DoD автоматической части ✅), `phase-6.md`, `_status.md`.
+
+**Остаётся (ручная часть DoD, выполняет пользователь):**
+
+- `expiresAt` в прошлое → «🔄 Проверить подписки» → mute + сообщение с оплатой → webhook → unmute.
+- Пользователь только с `CommonAccess` не затрагивается при ручном/cron-запуске.
+- Смена `cron_time` в Prisma Studio подхватывается планировщиком на живом процессе.
+
+**Статус:** Task 6.4 — автотесты/ревью ✅, ручная проверка ⏳. Фаза 6 — 🔄 в работе.
+
+## 2026-07-06 — Task 6.3: Планировщик (node-cron) + `/admin`: проверка, сводка, ссылка на панель
+
+- Добавлены зависимости `node-cron`, `@types/node-cron` в `apps/bot/package.json`.
+- Создан `apps/bot/src/util/moscowDate.ts`: `getMoscowCalendarDate`, `getMoscowTimeHHmm`,
+  `parseCronTime`, `cronTimeMatchesNow`, `getMoscowDayBounds` — единая точка для day-guard
+  планировщика и подсчёта «оплат за сегодня» по `Europe/Moscow` (не UTC/локаль сервера).
+- Создан `apps/bot/src/jobs/scheduler.ts`: `cron.schedule('* * * * *', …, { timezone:
+  'Europe/Moscow' })`; на каждом тике чтение `Setting.cron_time` без кэша; in-memory day-guard
+  по календарной дате МСК; malformed `cron_time` → `logger.warn`, тик пропускается; экспорт
+  `schedulerTick` и `resetSchedulerDayGuardForTests` для тестов.
+- Обновлён `apps/bot/src/jobs/dailyCheck.ts`: `runDailyCheck()` → `Promise<{ ranNow: boolean }>`
+  (`false` при `GET_LOCK=0`, `true` после успешной обработки и `notifyAdmins`).
+- Обновлён `apps/bot/src/index.ts`: `startScheduler()` при старте процесса.
+- Обновлён `apps/bot/src/bot/keyboards.ts`: `ADMIN_CHECK_CALLBACK`, `ADMIN_SUMMARY_CALLBACK`,
+  `adminKeyboard(panelUrl)` — «🔄 Проверить подписки», «📊 Сводка», «🔗 Панель» (url).
+- Обновлён `apps/bot/src/bot/handlers/admin.ts`: заглушка заменена на `handleAdmin`,
+  `handleAdminCheckCallback` (ответ по `ranNow` — явно разные тексты), `handleAdminSummaryCallback`
+  (ACTIVE/MUTED/оплаты за сегодня через `getMoscowDayBounds`, без кэша).
+- Обновлён `apps/bot/src/bot/bot.ts`: callback-хендлеры с обязательным `isAdmin` в цепочке.
+- Создан `apps/bot/test/scheduler.test.ts`: 9 тестов — совпадение `cron_time`, day-guard,
+  смена `cron_time` без рестарта, malformed value, граница полуночи МСК.
+- Создан `apps/bot/test/admin.test.ts`: 7 тестов — клавиатура с url-кнопкой, `ranNow` true/false,
+  сводка с границами МСК, отказ не-админу на callback через `isAdmin`.
+- Обновлён `apps/bot/test/dailyCheck.test.ts`: assert на `{ ranNow: true }` / `{ ranNow: false }`
+  при конкурентном вызове.
+- Out of scope соблюдён: напоминания (Фаза 7), логика mute/unmute (Task 6.1–6.2), веб-панель,
+  миграция Prisma.
+- Проверено: `npm test` — 94 passed; `npm run type-check`, `npm run lint`, `npm run build -w apps/bot`
+  — без ошибок; DoD Task 6.3 ✅; следующий — Task 6.4 (ручная проверка + закрытие фазы).
+
+## 2026-07-06 — Task 6.2: Unmute при оплате (расширение транзакции webhook)
+
+- Обновлён `apps/bot/src/services/subscription.ts`: `applyPayment` возвращает
+  `{ expiresAt, wasMuted }` — флаг читается до апдейта (`wasMuted = status === MUTED`);
+  `GrantAccessAfterPaymentParams` — поле `wasMuted: boolean`; новая
+  `unmuteUserAfterPayment(userId)` — `getChat(GROUP_ID)` → `restrictChatMember(GROUP_ID,
+  Number(userId), chat.permissions)` целиком (решение #2 фазы); guard на отсутствие
+  `chat.permissions`; при сбое Telegram — `logger.error`, возврат `false` (не ломает webhook).
+- Обновлён `apps/bot/src/payments/webhook.ts`: SUBSCRIPTION — деструктуризация
+  `{ expiresAt, wasMuted }` из `applyPayment`; LIFETIME — явный `wasMuted: false`;
+  `grantAccessBestEffort` после `grantAccessAfterPayment` — при `SUBSCRIPTION && wasMuted`
+  вызывает `unmuteUserAfterPayment`; при `false` — лог + алерт админам «Ошибка unmute после
+  оплаты», ответ `OK{InvId}` не затрагивается; идемпотентность транзакции webhook без изменений.
+- Обновлён `apps/bot/test/subscription.test.ts`: `describe('applyPayment')` — `wasMuted` для
+  `MUTED`/`ACTIVE`/`NEW`; `describe('unmuteUserAfterPayment')` — happy path (`getChat` +
+  `restrictChatMember` с правами группы) и сбой (лог, без throw); мок `getChat` в `bot.api`;
+  `grantAccessAfterPayment` — поле `wasMuted: false` в существующих кейсах.
+- Обновлён `apps/bot/test/webhook.test.ts`: unmute для `MUTED` после SUBSCRIPTION; пропуск для
+  `ACTIVE`/`NEW` и для LIFETIME даже при `MUTED`; сбой `getChat` → лог + алерт + `OK{InvId}`;
+  моки `getChat`/`restrictChatMember` в `bot.api`.
+- Out of scope соблюдён: сброс флагов напоминаний (Фаза 3), выдача invite-ссылки без изменений,
+  cron и `/admin` (Task 6.3), сквозные тесты фазы (Task 6.4).
+- Проверено: `npm test` — 78 passed; `npm run build -w apps/bot` — без ошибок; DoD Task 6.2 ✅;
+  следующий — Task 6.3 (планировщик + `/admin`).
+
+## 2026-07-06 — Task 6.1: `jobs/dailyCheck.ts` — mute истёкших + оплата + сводка админам
+
+- Создан `apps/bot/src/jobs/dailyCheck.ts`: `runDailyCheck()` — `GET_LOCK('daily_check', 0)` /
+  `RELEASE_LOCK` в одном `prisma.$transaction` (`finally` на release); выборка `User` где
+  `status=ACTIVE AND expiresAt <= now`; per-user цикл с атомарным guard через
+  `muteExpiredUser`; личное сообщение «Подписка истекла…» + `paymentKeyboard` на новый
+  `Payment(PENDING, SUBSCRIPTION)`; `notifyAdmins` со сводкой «замьючено N» + `formatUserMention`
+  — всегда, включая `N=0`; при `GET_LOCK=0` — `logger.warn` и выход без обработки.
+- Обновлён `apps/bot/src/services/subscription.ts`: `createSubscriptionPaymentLink(userId)` —
+  чтение `Setting` (`price`, `period_days` без кэша), `Payment.create` + `buildPaymentUrl`;
+  `muteExpiredUser(tx, userId, now)` — `updateMany` guard (`ACTIVE` + `expiresAt <= now` →
+  `MUTED`/`mutedAt`), best-effort `restrictChatMember` без `until_date` (`Number(userId)` для
+  `user_id`); ошибка Telegram логируется, возврат `true` если guard сработал.
+- Обновлён `apps/bot/src/bot/handlers/start.ts`: `handleSubscribeCallback` переключён на
+  `createSubscriptionPaymentLink` — поведение и тексты без изменений.
+- Создан `apps/bot/test/dailyCheck.test.ts`: 10 тестов — mute + сообщение + сводка; граница
+  `expiresAt === now` / `now + 1с`; CommonAccess-only не трогается; идемпотентность для `MUTED`;
+  сводка при `N=0`; сбой `restrictChatMember`/`sendMessage` на одном юзере не прерывает цикл;
+  конкурентный `GET_LOCK=0`; `RELEASE_LOCK` при ошибке внутри транзакции.
+- Обновлён `apps/bot/test/subscription.test.ts`: `describe('createSubscriptionPaymentLink')` и
+  `describe('muteExpiredUser')` — guard, restrict, возврат `false` при `count !== 1`.
+- Обновлён `apps/bot/test/start.test.ts`: мок `createSubscriptionPaymentLink` вместо прямых
+  `prisma.payment.create`/`buildPaymentUrl` — сценарии успеха/недоступной цены сохранены.
+- Out of scope соблюдён: напоминания (Фаза 7), unmute при оплате (Task 6.2), cron и `/admin`
+  (Task 6.3), миграция Prisma не нужна.
+- Проверено: `npm test` — 68 passed; DoD Task 6.1 ✅; следующий — Task 6.2 (unmute при оплате).
+
 ## 2026-07-05 — Task 5.5: Тесты сквозного сценария (автотесты)
 
 - Обновлён `apps/bot/test/start.test.ts`: мок `services/subscription.js` (`resendCommonAccessInviteLink`);

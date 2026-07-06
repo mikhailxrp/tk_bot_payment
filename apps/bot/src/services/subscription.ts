@@ -28,6 +28,7 @@ export type GrantAccessAfterPaymentParams = {
   amount: Payment['amount'];
   username: string | null;
   expiresAt?: Date;
+  wasMuted: boolean;
 };
 
 export type UserForExtension = {
@@ -49,16 +50,22 @@ export function calculateNewExpiresAt(
   return new Date(now.getTime() + periodMs);
 }
 
+export type ApplyPaymentResult = {
+  expiresAt: Date;
+  wasMuted: boolean;
+};
+
 export async function applyPayment(
   tx: Prisma.TransactionClient,
   payment: Payment,
   now: Date,
   periodDays: number,
-): Promise<Date> {
+): Promise<ApplyPaymentResult> {
   const user = await tx.user.findUniqueOrThrow({
     where: { id: payment.userId },
     select: { status: true, expiresAt: true },
   });
+  const wasMuted = user.status === UserStatus.MUTED;
   const expiresAt = calculateNewExpiresAt(user, now, periodDays);
 
   await tx.user.update({
@@ -71,7 +78,29 @@ export async function applyPayment(
     },
   });
 
-  return expiresAt;
+  return { expiresAt, wasMuted };
+}
+
+export async function unmuteUserAfterPayment(userId: bigint): Promise<boolean> {
+  try {
+    const chat = await bot.api.getChat(config.GROUP_ID.toString());
+    if (!chat.permissions) {
+      throw new Error('Group chat permissions are unavailable');
+    }
+
+    await bot.api.restrictChatMember(
+      config.GROUP_ID.toString(),
+      Number(userId),
+      chat.permissions,
+    );
+    return true;
+  } catch (err) {
+    logger.error(
+      { err, userId: userId.toString() },
+      'payment: failed to unmute user after payment',
+    );
+    return false;
+  }
 }
 
 export type SubscriptionPaymentLink = {
