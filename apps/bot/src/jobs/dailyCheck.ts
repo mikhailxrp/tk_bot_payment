@@ -64,7 +64,7 @@ function buildSummary(mutedUsers: DailyCheckCandidate[]): string {
   return `Ежедневная проверка подписок: замьючено ${mutedUsers.length} пользователей: ${mentions}.`;
 }
 
-export async function runDailyCheck(): Promise<void> {
+export async function runDailyCheck(): Promise<{ ranNow: boolean }> {
   const now = new Date();
 
   const outcome = await prisma.$transaction(async (tx): Promise<DailyCheckOutcome> => {
@@ -110,8 +110,9 @@ export async function runDailyCheck(): Promise<void> {
       { lockName: DAILY_CHECK_LOCK_NAME },
       'daily check: lock not acquired, another run is already in progress — skipping',
     );
-    return;
+    return { ranNow: false };
   }
 
   await notifyAdmins(bot, buildSummary(outcome.mutedUsers));
+  return { ranNow: true };
 }

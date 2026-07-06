@@ -2,7 +2,7 @@
 
 ## Статус
 
-🔄 В работе | Начата: 2026-07-06 | Ветка: `phase-6` | Task 6.1 ✅, 6.2–6.4 ⏳
+🔄 В работе | Начата: 2026-07-06 | Ветка: `phase-6` | Task 6.1–6.3 ✅, 6.4 ⏳
 
 ## Цель
 
@@ -98,7 +98,7 @@
 
 ### Task 6.2 — Unmute при оплате (расширение транзакции webhook)
 
-- **Статус:** ⏳ Ожидает
+- **Статус:** ✅ Готово
 - **Workspace:** bot
 - **Цель:** `applyPayment` дополнительно возвращает `wasMuted` (статус пользователя до апдейта
   был `MUTED`); после коммита транзакции, best-effort (как invite-ссылка в Фазе 5), для
@@ -110,19 +110,19 @@
 - **Out of scope:** сброс `reminderSentAt`/`lastMutedRemindAt` (уже реализовано в Фазе 3),
   сама выдача invite-ссылки (не меняется)
 - **DoD:**
-  - [ ] оплата пользователем в статусе `MUTED` → после коммита вызывается `getChat` +
+  - [x] оплата пользователем в статусе `MUTED` → после коммита вызывается `getChat` +
         `restrictChatMember` с текущими правами группы; `status` уже `ACTIVE` (из
         `applyPayment`)
-  - [ ] оплата пользователем НЕ в статусе `MUTED` (`ACTIVE`/`NEW`) → `restrictChatMember`
+  - [x] оплата пользователем НЕ в статусе `MUTED` (`ACTIVE`/`NEW`) → `restrictChatMember`
         для unmute не вызывается
-  - [ ] `LIFETIME`-платежи никогда не вызывают unmute-ветку (затрагивает только
+  - [x] `LIFETIME`-платежи никогда не вызывают unmute-ветку (затрагивает только
         `SUBSCRIPTION`)
-  - [ ] сбой `getChat`/`restrictChatMember` логируется, уходит алерт админам, не влияет на уже
+  - [x] сбой `getChat`/`restrictChatMember` логируется, уходит алерт админам, не влияет на уже
         отданный `OK{InvId}` (тот же паттерн, что и сбой invite-ссылки)
 
 ### Task 6.3 — Планировщик (node-cron) + `/admin`: проверка, сводка, ссылка на панель
 
-- **Статус:** ⏳ Ожидает
+- **Статус:** ✅ Готово
 - **Workspace:** bot
 - **Цель:** `node-cron` тикает раз в минуту (`* * * * *`, `timezone: 'Europe/Moscow'`),
   сверяет `Setting.cron_time`, раз в календарный день вызывает `runDailyCheck()` (лок —
@@ -136,16 +136,16 @@
   `apps/bot/src/bot/bot.ts`, `apps/bot/test/scheduler.test.ts`, `apps/bot/test/admin.test.ts`
 - **Out of scope:** сама логика mute (Task 6.1), напоминания (Фаза 7)
 - **DoD:**
-  - [ ] тик, где текущее `HH:mm` (Europe/Moscow) совпадает с `Setting.cron_time`, запускает
+  - [x] тик, где текущее `HH:mm` (Europe/Moscow) совпадает с `Setting.cron_time`, запускает
         `runDailyCheck()` один раз; повторные тики в ту же минуту/день — не запускают повторно
-  - [ ] смена `Setting.cron_time` между тиками подхватывается без рестарта процесса
-  - [ ] `/admin` доступен только через `isAdmin`; кнопка «Проверить подписки» вызывает
+  - [x] смена `Setting.cron_time` между тиками подхватывается без рестарта процесса
+  - [x] `/admin` доступен только через `isAdmin`; кнопка «Проверить подписки» вызывает
         `runDailyCheck()` и отвечает сводкой; конкурентный вызов (тик cron во время ручного
         запуска) — пропускается с логом благодаря `GET_LOCK`-защите внутри `runDailyCheck()`
-  - [ ] «Сводка» показывает актуальные счётчики (активные/замьюченные/оплаты за сегодня) без
+  - [x] «Сводка» показывает актуальные счётчики (активные/замьюченные/оплаты за сегодня) без
         кэша
-  - [ ] «Панель» — рабочая url-кнопка на `ADMIN_PANEL_URL`
-  - [ ] не-админ на `/admin` — прежнее поведение (отказ, без изменений)
+  - [x] «Панель» — рабочая url-кнопка на `ADMIN_PANEL_URL`
+  - [x] не-админ на `/admin` — прежнее поведение (отказ, без изменений)
 
 ### Task 6.4 — Тесты + ручная проверка
 
@@ -175,6 +175,16 @@
 
 ## Итоги
 
+- **2026-07-06 — Task 6.3 ✅:** `moscowDate.ts` — календарная дата и границы суток по МСК;
+  `scheduler.ts` — тик каждую минуту, live `Setting.cron_time`, in-memory day-guard; `/admin` —
+  клавиатура с ручной проверкой (`ranNow` true/false → разные тексты), сводкой и url на панель;
+  callback-хендлеры с `isAdmin`; `runDailyCheck()` → `{ ranNow: boolean }`; +16 автотестов
+  (`scheduler.test.ts`, `admin.test.ts`), всего 94 passed.
+- **2026-07-06 — Task 6.2 ✅:** `applyPayment` → `{ expiresAt, wasMuted }` (статус до апдейта);
+  `unmuteUserAfterPayment` — `getChat` + `restrictChatMember` с `chat.permissions` целиком;
+  `user_id` — `Number(userId)`; LIFETIME явно `wasMuted: false`, unmute только при
+  `SUBSCRIPTION && wasMuted`; сбой unmute — лог + алерт, `OK{InvId}` без изменений; +10 автотестов
+  (`subscription.test.ts`, `webhook.test.ts`), всего 78 passed.
 - **2026-07-06 — Task 6.1 ✅:** граница мьюта — `expiresAt <= now` (`lte`), не строгое `<` (DoD
   требует мьютить при `expiresAt === now`). `handleSubscribeCallback` →
   `createSubscriptionPaymentLink`; адаптация мока в `start.test.ts` неизбежна при `vi.mock` всего

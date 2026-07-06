@@ -4,6 +4,61 @@
 
 ---
 
+## 2026-07-06 — Task 6.3: Планировщик (node-cron) + `/admin`: проверка, сводка, ссылка на панель
+
+- Добавлены зависимости `node-cron`, `@types/node-cron` в `apps/bot/package.json`.
+- Создан `apps/bot/src/util/moscowDate.ts`: `getMoscowCalendarDate`, `getMoscowTimeHHmm`,
+  `parseCronTime`, `cronTimeMatchesNow`, `getMoscowDayBounds` — единая точка для day-guard
+  планировщика и подсчёта «оплат за сегодня» по `Europe/Moscow` (не UTC/локаль сервера).
+- Создан `apps/bot/src/jobs/scheduler.ts`: `cron.schedule('* * * * *', …, { timezone:
+  'Europe/Moscow' })`; на каждом тике чтение `Setting.cron_time` без кэша; in-memory day-guard
+  по календарной дате МСК; malformed `cron_time` → `logger.warn`, тик пропускается; экспорт
+  `schedulerTick` и `resetSchedulerDayGuardForTests` для тестов.
+- Обновлён `apps/bot/src/jobs/dailyCheck.ts`: `runDailyCheck()` → `Promise<{ ranNow: boolean }>`
+  (`false` при `GET_LOCK=0`, `true` после успешной обработки и `notifyAdmins`).
+- Обновлён `apps/bot/src/index.ts`: `startScheduler()` при старте процесса.
+- Обновлён `apps/bot/src/bot/keyboards.ts`: `ADMIN_CHECK_CALLBACK`, `ADMIN_SUMMARY_CALLBACK`,
+  `adminKeyboard(panelUrl)` — «🔄 Проверить подписки», «📊 Сводка», «🔗 Панель» (url).
+- Обновлён `apps/bot/src/bot/handlers/admin.ts`: заглушка заменена на `handleAdmin`,
+  `handleAdminCheckCallback` (ответ по `ranNow` — явно разные тексты), `handleAdminSummaryCallback`
+  (ACTIVE/MUTED/оплаты за сегодня через `getMoscowDayBounds`, без кэша).
+- Обновлён `apps/bot/src/bot/bot.ts`: callback-хендлеры с обязательным `isAdmin` в цепочке.
+- Создан `apps/bot/test/scheduler.test.ts`: 9 тестов — совпадение `cron_time`, day-guard,
+  смена `cron_time` без рестарта, malformed value, граница полуночи МСК.
+- Создан `apps/bot/test/admin.test.ts`: 7 тестов — клавиатура с url-кнопкой, `ranNow` true/false,
+  сводка с границами МСК, отказ не-админу на callback через `isAdmin`.
+- Обновлён `apps/bot/test/dailyCheck.test.ts`: assert на `{ ranNow: true }` / `{ ranNow: false }`
+  при конкурентном вызове.
+- Out of scope соблюдён: напоминания (Фаза 7), логика mute/unmute (Task 6.1–6.2), веб-панель,
+  миграция Prisma.
+- Проверено: `npm test` — 94 passed; `npm run type-check`, `npm run lint`, `npm run build -w apps/bot`
+  — без ошибок; DoD Task 6.3 ✅; следующий — Task 6.4 (ручная проверка + закрытие фазы).
+
+## 2026-07-06 — Task 6.2: Unmute при оплате (расширение транзакции webhook)
+
+- Обновлён `apps/bot/src/services/subscription.ts`: `applyPayment` возвращает
+  `{ expiresAt, wasMuted }` — флаг читается до апдейта (`wasMuted = status === MUTED`);
+  `GrantAccessAfterPaymentParams` — поле `wasMuted: boolean`; новая
+  `unmuteUserAfterPayment(userId)` — `getChat(GROUP_ID)` → `restrictChatMember(GROUP_ID,
+  Number(userId), chat.permissions)` целиком (решение #2 фазы); guard на отсутствие
+  `chat.permissions`; при сбое Telegram — `logger.error`, возврат `false` (не ломает webhook).
+- Обновлён `apps/bot/src/payments/webhook.ts`: SUBSCRIPTION — деструктуризация
+  `{ expiresAt, wasMuted }` из `applyPayment`; LIFETIME — явный `wasMuted: false`;
+  `grantAccessBestEffort` после `grantAccessAfterPayment` — при `SUBSCRIPTION && wasMuted`
+  вызывает `unmuteUserAfterPayment`; при `false` — лог + алерт админам «Ошибка unmute после
+  оплаты», ответ `OK{InvId}` не затрагивается; идемпотентность транзакции webhook без изменений.
+- Обновлён `apps/bot/test/subscription.test.ts`: `describe('applyPayment')` — `wasMuted` для
+  `MUTED`/`ACTIVE`/`NEW`; `describe('unmuteUserAfterPayment')` — happy path (`getChat` +
+  `restrictChatMember` с правами группы) и сбой (лог, без throw); мок `getChat` в `bot.api`;
+  `grantAccessAfterPayment` — поле `wasMuted: false` в существующих кейсах.
+- Обновлён `apps/bot/test/webhook.test.ts`: unmute для `MUTED` после SUBSCRIPTION; пропуск для
+  `ACTIVE`/`NEW` и для LIFETIME даже при `MUTED`; сбой `getChat` → лог + алерт + `OK{InvId}`;
+  моки `getChat`/`restrictChatMember` в `bot.api`.
+- Out of scope соблюдён: сброс флагов напоминаний (Фаза 3), выдача invite-ссылки без изменений,
+  cron и `/admin` (Task 6.3), сквозные тесты фазы (Task 6.4).
+- Проверено: `npm test` — 78 passed; `npm run build -w apps/bot` — без ошибок; DoD Task 6.2 ✅;
+  следующий — Task 6.3 (планировщик + `/admin`).
+
 ## 2026-07-06 — Task 6.1: `jobs/dailyCheck.ts` — mute истёкших + оплата + сводка админам
 
 - Создан `apps/bot/src/jobs/dailyCheck.ts`: `runDailyCheck()` — `GET_LOCK('daily_check', 0)` /

@@ -8,10 +8,12 @@
     "@tg-bot/db": "*",
     "fastify": "^5.3.2",
     "grammy": "^1.44.0",
+    "node-cron": "^4.1.0",
     "pino": "^10.3.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/node-cron": "^3.0.11",
     "tsx": "^4.23.0",
     "vitest": "^3.2.4"
   },
