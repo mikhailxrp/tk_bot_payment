@@ -1,25 +1,10 @@
 import type { Context } from 'grammy';
 import type { ChatMemberUpdated } from '@grammyjs/types';
 
-import { bot } from '../bot.js';
+import { commonBot, subscriptionBot } from '../bot.js';
 import { config } from '../../config.js';
 import { notifyAdmins } from '../../services/notify.js';
 import { formatUserMention, setCommonAccessInGroup, setUserInGroup } from '../../services/subscription.js';
-
-type GroupKind = 'group' | 'common' | null;
-
-function resolveGroupKind(chatId: number): GroupKind {
-  const id = BigInt(chatId);
-
-  if (id === config.GROUP_ID) {
-    return 'group';
-  }
-  if (id === config.COMMON_GROUP_ID) {
-    return 'common';
-  }
-
-  return null;
-}
 
 function resolveInGroup(status: string): boolean | null {
   if (status === 'member') {
@@ -40,30 +25,38 @@ function isJoinTransition(update: ChatMemberUpdated): boolean {
   return wasOutside && isNowMember;
 }
 
-export async function handleChatMemberUpdate(ctx: Context): Promise<void> {
+export async function handleGroupChatMemberUpdate(ctx: Context): Promise<void> {
   const update = ctx.chatMember;
-  if (!update) {
-    return;
-  }
-
-  const groupKind = resolveGroupKind(update.chat.id);
-  if (!groupKind) {
+  if (!update || BigInt(update.chat.id) !== config.GROUP_ID) {
     return;
   }
 
   const userId = BigInt(update.new_chat_member.user.id);
   const inGroup = resolveInGroup(update.new_chat_member.status);
   if (inGroup !== null) {
-    if (groupKind === 'group') {
-      await setUserInGroup(userId, inGroup);
-    } else {
-      await setCommonAccessInGroup(userId, inGroup);
-    }
+    await setUserInGroup(userId, inGroup);
   }
 
   if (isJoinTransition(update)) {
     const mention = formatUserMention(update.new_chat_member.user.username ?? null, userId);
-    const groupLabel = groupKind === 'group' ? 'закрытую группу' : 'общую группу';
-    await notifyAdmins(bot, `${mention} вступил(а) в ${groupLabel}`);
+    await notifyAdmins(subscriptionBot, `${mention} вступил(а) в закрытую группу`);
+  }
+}
+
+export async function handleCommonChatMemberUpdate(ctx: Context): Promise<void> {
+  const update = ctx.chatMember;
+  if (!update || BigInt(update.chat.id) !== config.COMMON_GROUP_ID) {
+    return;
+  }
+
+  const userId = BigInt(update.new_chat_member.user.id);
+  const inGroup = resolveInGroup(update.new_chat_member.status);
+  if (inGroup !== null) {
+    await setCommonAccessInGroup(userId, inGroup);
+  }
+
+  if (isJoinTransition(update)) {
+    const mention = formatUserMention(update.new_chat_member.user.username ?? null, userId);
+    await notifyAdmins(commonBot, `${mention} вступил(а) в общую группу`);
   }
 }

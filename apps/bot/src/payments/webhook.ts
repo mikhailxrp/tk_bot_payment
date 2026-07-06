@@ -2,7 +2,7 @@ import { PaymentStatus, ProductType, prisma } from '@tg-bot/db';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
-import { bot } from '../bot/bot.js';
+import { commonBot, subscriptionBot } from '../bot/bot.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { notifyAdmins } from '../services/notify.js';
@@ -41,6 +41,8 @@ async function grantAccessBestEffort(result: WebhookOkResult): Promise<void> {
     return;
   }
 
+  const targetBot = result.access.product === ProductType.LIFETIME ? commonBot : subscriptionBot;
+
   try {
     await grantAccessAfterPayment(result.access);
   } catch (err) {
@@ -55,7 +57,7 @@ async function grantAccessBestEffort(result: WebhookOkResult): Promise<void> {
 
     try {
       await notifyAdmins(
-        bot,
+        targetBot,
         `⚠️ Ошибка выдачи доступа после оплаты (InvId ${result.invId}). Проверьте вручную.`,
       );
     } catch (alertErr) {
@@ -82,7 +84,7 @@ async function grantAccessBestEffort(result: WebhookOkResult): Promise<void> {
         );
 
         await notifyAdmins(
-          bot,
+          subscriptionBot,
           `⚠️ Ошибка unmute после оплаты (InvId ${result.invId}). Проверьте вручную.`,
         );
       }

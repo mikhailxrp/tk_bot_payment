@@ -1,4 +1,5 @@
 process.env.BOT_TOKEN = 'test-bot-token';
+process.env.COMMON_BOT_TOKEN = 'test-common-bot-token';
 process.env.GROUP_ID = '-1001234567890';
 process.env.COMMON_GROUP_ID = '-1009876543210';
 process.env.ADMIN_ID = '123456789';

@@ -1,7 +1,7 @@
 import { prisma, UserStatus } from '@tg-bot/db';
 import type { Prisma } from '@prisma/client';
 
-import { bot } from '../bot/bot.js';
+import { subscriptionBot } from '../bot/bot.js';
 import { paymentKeyboard } from '../bot/keyboards.js';
 import { logger } from '../logger.js';
 import { notifyAdmins } from '../services/notify.js';
@@ -48,7 +48,7 @@ async function sendExpiredSubscriptionMessage(userId: bigint): Promise<void> {
     return;
   }
 
-  await bot.api.sendMessage(userId.toString(), EXPIRED_SUBSCRIPTION_MESSAGE, {
+  await subscriptionBot.api.sendMessage(userId.toString(), EXPIRED_SUBSCRIPTION_MESSAGE, {
     reply_markup: paymentKeyboard(link.paymentUrl),
   });
 }
@@ -119,6 +119,6 @@ export async function runDailyCheck(): Promise<{ ranNow: boolean }> {
     }
   }
 
-  await notifyAdmins(bot, buildSummary(outcome.mutedUsers));
+  await notifyAdmins(subscriptionBot, buildSummary(outcome.mutedUsers));
   return { ranNow: true };
 }

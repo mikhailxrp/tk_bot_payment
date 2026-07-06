@@ -32,7 +32,6 @@ type SubscriptionPaymentLink = { paymentUrl: string; amount: string; periodDays:
 
 const {
   mockUserUpsert,
-  mockUserFindUnique,
   mockCommonAccessFindUnique,
   mockSettingFindUnique,
   mockPaymentCreate,
@@ -41,8 +40,6 @@ const {
   mockAdminFindUnique,
 } = vi.hoisted(() => ({
   mockUserUpsert: vi.fn<(args: UserUpsertArgs) => Promise<unknown>>(),
-  mockUserFindUnique:
-    vi.fn<(args: { where: { id: bigint } }) => Promise<{ id: bigint } | null>>(),
   mockCommonAccessFindUnique:
     vi.fn<
       (args: { where: { userId: bigint } }) => Promise<{ userId: bigint; inGroup: boolean } | null>
@@ -68,7 +65,6 @@ vi.mock('@tg-bot/db', () => ({
   prisma: {
     user: {
       upsert: mockUserUpsert,
-      findUnique: mockUserFindUnique,
     },
     commonAccess: {
       findUnique: mockCommonAccessFindUnique,
@@ -100,9 +96,10 @@ vi.mock('../src/jobs/dailyCheck.js', () => ({
 
 import {
   handleCommonAccessCallback,
+  handleCommonStart,
   handleResendAccessCallback,
-  handleStart,
   handleSubscribeCallback,
+  handleSubscriptionStart,
 } from '../src/bot/handlers/start.js';
 import {
   COMMON_ACCESS_CALLBACK,
@@ -155,115 +152,58 @@ function getPaymentUrl(
   return button.url;
 }
 
-describe('handleStart', () => {
+describe('handleSubscriptionStart', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUserUpsert.mockResolvedValue({});
-    mockUserFindUnique.mockResolvedValue({ id: TEST_USER_ID_BIGINT });
-    mockCommonAccessFindUnique.mockResolvedValue(null);
     mockAdminFindUnique.mockResolvedValue(null);
   });
 
-  it('shows both product buttons when CommonAccess is absent', async () => {
+  it('shows only the subscribe button', async () => {
     const { ctx, reply } = createMockContext();
 
-    await handleStart(ctx);
+    await handleSubscriptionStart(ctx);
 
     expect(mockUserUpsert).toHaveBeenCalledOnce();
-    expect(mockCommonAccessFindUnique).toHaveBeenCalledWith({
-      where: { userId: TEST_USER_ID_BIGINT },
-    });
+    expect(mockCommonAccessFindUnique).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith(
-      'Добро пожаловать! Выберите группу для оформления доступа.',
+      'Добро пожаловать! Оформите подписку на закрытую группу.',
       expect.any(Object),
     );
 
     const buttons = getInlineKeyboardButtons(reply);
-    expect(buttons).toHaveLength(2);
-    expect(buttons[0]).toMatchObject({
-      text: 'Закрытая группа (подписка)',
-      callback_data: SUBSCRIBE_CALLBACK,
-    });
-    expect(buttons[1]).toMatchObject({
-      text: 'Группа KORDON Transfer (разовый доступ)',
-      callback_data: COMMON_ACCESS_CALLBACK,
-    });
-  });
-
-  it('hides common access button and shows paid message when CommonAccess exists in group', async () => {
-    mockCommonAccessFindUnique.mockResolvedValue({
-      userId: TEST_USER_ID_BIGINT,
-      inGroup: true,
-    });
-    const { ctx, reply } = createMockContext();
-
-    await handleStart(ctx);
-
-    expect(reply).toHaveBeenCalledWith(
-      expect.stringContaining('Доступ в общую группу уже оплачен.'),
-      expect.any(Object),
-    );
-
-    const buttons = getInlineKeyboardButtons(reply);
-    expect(buttons).toHaveLength(1);
-    expect(buttons[0]).toMatchObject({
-      text: 'Закрытая группа (подписка)',
-      callback_data: SUBSCRIBE_CALLBACK,
-    });
-  });
-
-  it('shows resend access button when CommonAccess exists but user is not in group', async () => {
-    mockCommonAccessFindUnique.mockResolvedValue({
-      userId: TEST_USER_ID_BIGINT,
-      inGroup: false,
-    });
-    const { ctx, reply } = createMockContext();
-
-    await handleStart(ctx);
-
-    expect(reply).toHaveBeenCalledWith(
-      expect.stringContaining('Доступ в общую группу уже оплачен.'),
-      expect.any(Object),
-    );
-
-    const buttons = getInlineKeyboardButtons(reply);
-    expect(buttons).toHaveLength(2);
-    expect(buttons[1]).toMatchObject({
-      text: 'Получить ссылку снова',
-      callback_data: RESEND_ACCESS_CALLBACK,
-    });
+    expect(buttons).toEqual([
+      { text: 'Закрытая группа (подписка)', callback_data: SUBSCRIBE_CALLBACK },
+    ]);
   });
 
   it('handles deep-link /start paid without database calls', async () => {
     const { ctx, reply } = createMockContext({ match: 'paid' });
 
-    await handleStart(ctx);
+    await handleSubscriptionStart(ctx);
 
     expect(reply).toHaveBeenCalledWith(expect.stringContaining('Оплата прошла успешно'));
     expect(mockUserUpsert).not.toHaveBeenCalled();
-    expect(mockCommonAccessFindUnique).not.toHaveBeenCalled();
   });
 
   it('handles deep-link /start fail without database calls', async () => {
     const { ctx, reply } = createMockContext({ match: 'fail' });
 
-    await handleStart(ctx);
+    await handleSubscriptionStart(ctx);
 
     expect(reply).toHaveBeenCalledWith(expect.stringContaining('Оплата не была завершена'));
     expect(mockUserUpsert).not.toHaveBeenCalled();
-    expect(mockCommonAccessFindUnique).not.toHaveBeenCalled();
   });
 
-  it('shows the admin menu instead of product buttons when the user is a bot admin', async () => {
+  it('shows the admin menu instead of the subscribe button when the user is a bot admin', async () => {
     mockAdminFindUnique.mockResolvedValue({ telegramId: TEST_USER_ID_BIGINT });
     const { ctx, reply } = createMockContext();
 
-    await handleStart(ctx);
+    await handleSubscriptionStart(ctx);
 
     expect(mockAdminFindUnique).toHaveBeenCalledWith({
       where: { telegramId: TEST_USER_ID_BIGINT },
     });
-    expect(mockCommonAccessFindUnique).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith(
       'Админ-панель бота: выберите действие.',
       expect.any(Object),
@@ -277,25 +217,103 @@ describe('handleStart', () => {
     ]);
   });
 
-  it('sends the persistent "Меню" keyboard on first contact only', async () => {
-    mockUserFindUnique.mockResolvedValue(null);
+  it('always sends the persistent "Меню" keyboard before the welcome message', async () => {
     const { ctx, reply } = createMockContext();
 
-    await handleStart(ctx);
+    await handleSubscriptionStart(ctx);
 
     const [, options] = reply.mock.calls[0] as unknown as [string, KeyboardReplyOptions];
     expect(options.reply_markup?.keyboard).toEqual([[{ text: '☰ Меню' }]]);
   });
+});
 
-  it('does not resend the persistent keyboard for a returning user', async () => {
-    mockUserFindUnique.mockResolvedValue({ id: TEST_USER_ID_BIGINT });
+describe('handleCommonStart', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserUpsert.mockResolvedValue({});
+    mockCommonAccessFindUnique.mockResolvedValue(null);
+  });
+
+  it('shows the common access button when CommonAccess is absent', async () => {
     const { ctx, reply } = createMockContext();
 
-    await handleStart(ctx);
+    await handleCommonStart(ctx);
 
-    const calls = reply.mock.calls as unknown as [string, KeyboardReplyOptions][];
-    const hasPersistentKeyboard = calls.some(([, options]) => options?.reply_markup?.keyboard);
-    expect(hasPersistentKeyboard).toBe(false);
+    expect(mockUserUpsert).toHaveBeenCalledOnce();
+    expect(mockCommonAccessFindUnique).toHaveBeenCalledWith({
+      where: { userId: TEST_USER_ID_BIGINT },
+    });
+    expect(reply).toHaveBeenCalledWith(
+      'Добро пожаловать! Оформите доступ в группу KORDON Transfer.',
+      expect.any(Object),
+    );
+
+    const buttons = getInlineKeyboardButtons(reply);
+    expect(buttons).toEqual([
+      { text: 'Группа KORDON Transfer (разовый доступ)', callback_data: COMMON_ACCESS_CALLBACK },
+    ]);
+  });
+
+  it('hides the button and shows paid message when CommonAccess exists in group', async () => {
+    mockCommonAccessFindUnique.mockResolvedValue({
+      userId: TEST_USER_ID_BIGINT,
+      inGroup: true,
+    });
+    const { ctx, reply } = createMockContext();
+
+    await handleCommonStart(ctx);
+
+    expect(reply).toHaveBeenCalledWith(
+      expect.stringContaining('Доступ в общую группу уже оплачен.'),
+      undefined,
+    );
+  });
+
+  it('shows resend access button when CommonAccess exists but user is not in group', async () => {
+    mockCommonAccessFindUnique.mockResolvedValue({
+      userId: TEST_USER_ID_BIGINT,
+      inGroup: false,
+    });
+    const { ctx, reply } = createMockContext();
+
+    await handleCommonStart(ctx);
+
+    expect(reply).toHaveBeenCalledWith(
+      expect.stringContaining('Доступ в общую группу уже оплачен.'),
+      expect.any(Object),
+    );
+
+    const buttons = getInlineKeyboardButtons(reply);
+    expect(buttons).toEqual([{ text: 'Получить ссылку снова', callback_data: RESEND_ACCESS_CALLBACK }]);
+  });
+
+  it('handles deep-link /start paid without database calls', async () => {
+    const { ctx, reply } = createMockContext({ match: 'paid' });
+
+    await handleCommonStart(ctx);
+
+    expect(reply).toHaveBeenCalledWith(expect.stringContaining('Оплата прошла успешно'));
+    expect(mockUserUpsert).not.toHaveBeenCalled();
+    expect(mockCommonAccessFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('handles deep-link /start fail without database calls', async () => {
+    const { ctx, reply } = createMockContext({ match: 'fail' });
+
+    await handleCommonStart(ctx);
+
+    expect(reply).toHaveBeenCalledWith(expect.stringContaining('Оплата не была завершена'));
+    expect(mockUserUpsert).not.toHaveBeenCalled();
+    expect(mockCommonAccessFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('always sends the persistent "Меню" keyboard before the welcome message', async () => {
+    const { ctx, reply } = createMockContext();
+
+    await handleCommonStart(ctx);
+
+    const [, options] = reply.mock.calls[0] as unknown as [string, KeyboardReplyOptions];
+    expect(options.reply_markup?.keyboard).toEqual([[{ text: '☰ Меню' }]]);
   });
 });
 

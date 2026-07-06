@@ -13,19 +13,25 @@ export function mainReplyKeyboard(): Keyboard {
 
 export type CommonAccessUiState = 'none' | 'paid_in_group' | 'paid_not_in_group';
 
-export function productChoiceKeyboard(commonAccessState: CommonAccessUiState): InlineKeyboard {
-  const keyboard = new InlineKeyboard().text(
-    'Закрытая группа (подписка)',
-    SUBSCRIBE_CALLBACK,
-  );
+export function subscriptionKeyboard(): InlineKeyboard {
+  return new InlineKeyboard().text('Закрытая группа (подписка)', SUBSCRIBE_CALLBACK);
+}
 
+export function commonAccessKeyboard(
+  commonAccessState: CommonAccessUiState,
+): InlineKeyboard | undefined {
   if (commonAccessState === 'none') {
-    keyboard.row().text('Группа KORDON Transfer (разовый доступ)', COMMON_ACCESS_CALLBACK);
-  } else if (commonAccessState === 'paid_not_in_group') {
-    keyboard.row().text('Получить ссылку снова', RESEND_ACCESS_CALLBACK);
+    return new InlineKeyboard().text(
+      'Группа KORDON Transfer (разовый доступ)',
+      COMMON_ACCESS_CALLBACK,
+    );
   }
 
-  return keyboard;
+  if (commonAccessState === 'paid_not_in_group') {
+    return new InlineKeyboard().text('Получить ссылку снова', RESEND_ACCESS_CALLBACK);
+  }
+
+  return undefined;
 }
 
 export function paymentKeyboard(url: string): InlineKeyboard {
