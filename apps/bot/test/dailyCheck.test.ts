@@ -6,17 +6,24 @@ type FixtureUser = {
   status: string;
   expiresAt: Date | null;
   mutedAt: Date | null;
+  reminderSentAt: Date | null;
+  lastMutedRemindAt: Date | null;
 };
 
-type FindManyArgs = {
-  where: { status: string; expiresAt: { lte: Date } };
-  select: { id: true; username: true };
+type FieldCondition = { gt?: Date; lte?: Date } | Date | string | null;
+
+type WhereClause = {
+  OR?: WhereClause[];
+  id?: bigint;
+  status?: string;
+  expiresAt?: FieldCondition;
+  mutedAt?: FieldCondition;
+  lastMutedRemindAt?: FieldCondition;
+  reminderSentAt?: FieldCondition;
 };
 
-type UpdateManyArgs = {
-  where: { id: bigint; status: string; expiresAt: { lte: Date } };
-  data: { status: string; mutedAt: Date };
-};
+type FindManyArgs = { where: WhereClause; select: { id: true; username: true } };
+type UpdateManyArgs = { where: WhereClause; data: Record<string, unknown> };
 
 type SettingFindArgs = { where: { key: string } };
 
@@ -28,6 +35,7 @@ const {
   mockPaymentCreate,
   mockLoggerWarn,
   mockLoggerError,
+  mockLoggerInfo,
   fixtureState,
   fakeTx,
   mockTransaction,
@@ -40,31 +48,66 @@ const {
     queryRawCalls: [],
   };
 
+  function matchesField(value: Date | null, condition: FieldCondition | undefined): boolean {
+    if (condition === undefined) {
+      return true;
+    }
+    if (condition === null) {
+      return value === null;
+    }
+    if (condition instanceof Date) {
+      return value !== null && value.getTime() === condition.getTime();
+    }
+    if (typeof condition === 'object') {
+      if (condition.gt && !(value !== null && value.getTime() > condition.gt.getTime())) {
+        return false;
+      }
+      if (condition.lte && !(value !== null && value.getTime() <= condition.lte.getTime())) {
+        return false;
+      }
+      return true;
+    }
+    return true;
+  }
+
+  function matchesWhere(user: FixtureUser, where: WhereClause): boolean {
+    if (where.OR && !where.OR.some((clause) => matchesWhere(user, clause))) {
+      return false;
+    }
+    if (where.id !== undefined && user.id !== where.id) {
+      return false;
+    }
+    if (where.status !== undefined && user.status !== where.status) {
+      return false;
+    }
+    if (!matchesField(user.expiresAt, where.expiresAt)) {
+      return false;
+    }
+    if (!matchesField(user.mutedAt, where.mutedAt)) {
+      return false;
+    }
+    if (!matchesField(user.lastMutedRemindAt, where.lastMutedRemindAt)) {
+      return false;
+    }
+    if (!matchesField(user.reminderSentAt, where.reminderSentAt)) {
+      return false;
+    }
+    return true;
+  }
+
   function fakeFindMany(args: FindManyArgs) {
-    const matches = state.users.filter(
-      (u) =>
-        u.status === args.where.status &&
-        u.expiresAt !== null &&
-        u.expiresAt.getTime() <= args.where.expiresAt.lte.getTime(),
-    );
+    const matches = state.users.filter((u) => matchesWhere(u, args.where));
     return Promise.resolve(matches.map((u) => ({ id: u.id, username: u.username })));
   }
 
   function fakeUpdateMany(args: UpdateManyArgs) {
-    const user = state.users.find(
-      (u) =>
-        u.id === args.where.id &&
-        u.status === args.where.status &&
-        u.expiresAt !== null &&
-        u.expiresAt.getTime() <= args.where.expiresAt.lte.getTime(),
-    );
+    const user = state.users.find((u) => matchesWhere(u, args.where));
 
     if (!user) {
       return Promise.resolve({ count: 0 });
     }
 
-    user.status = args.data.status;
-    user.mutedAt = args.data.mutedAt;
+    Object.assign(user, args.data);
     return Promise.resolve({ count: 1 });
   }
 
@@ -117,6 +160,7 @@ const {
     mockPaymentCreate: vi.fn<(args: unknown) => Promise<{ id: number }>>(),
     mockLoggerWarn: vi.fn<(obj: unknown, msg?: string) => void>(),
     mockLoggerError: vi.fn<(obj: unknown, msg?: string) => void>(),
+    mockLoggerInfo: vi.fn<(obj: unknown, msg?: string) => void>(),
     fixtureState: state,
     fakeTx: tx,
     mockTransaction: transaction,
@@ -142,17 +186,33 @@ vi.mock('../src/bot/bot.js', () => ({
   },
 }));
 
-vi.mock('../src/services/notify.js', () => ({
-  notifyAdmins: mockNotifyAdmins,
-}));
+vi.mock('../src/services/notify.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/notify.js')>();
+  return {
+    ...actual,
+    notifyAdmins: mockNotifyAdmins,
+    sendThrottledPersonalMessages: (
+      bot: Parameters<typeof actual.sendThrottledPersonalMessages>[0],
+      items: Parameters<typeof actual.sendThrottledPersonalMessages>[1],
+      options?: Parameters<typeof actual.sendThrottledPersonalMessages>[2],
+    ) =>
+      actual.sendThrottledPersonalMessages(bot, items, {
+        ...options,
+        delay: () => Promise.resolve(),
+      }),
+  };
+});
 
 vi.mock('../src/logger.js', () => ({
-  logger: { info: vi.fn(), warn: mockLoggerWarn, error: mockLoggerError },
+  logger: { info: mockLoggerInfo, warn: mockLoggerWarn, error: mockLoggerError },
 }));
 
 import { runDailyCheck } from '../src/jobs/dailyCheck.js';
 
 const NOW = new Date('2026-01-15T12:00:00.000Z');
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const REMIND_DAYS = 3;
+const MUTED_REMIND_DAYS = 10;
 
 function makeUser(overrides: Partial<FixtureUser> & { id: bigint }): FixtureUser {
   return {
@@ -160,6 +220,8 @@ function makeUser(overrides: Partial<FixtureUser> & { id: bigint }): FixtureUser
     status: 'ACTIVE',
     expiresAt: null,
     mutedAt: null,
+    reminderSentAt: null,
+    lastMutedRemindAt: null,
     ...overrides,
   };
 }
@@ -183,6 +245,12 @@ describe('runDailyCheck', () => {
       }
       if (where.key === 'period_days') {
         return Promise.resolve({ value: '30' });
+      }
+      if (where.key === 'remind_days') {
+        return Promise.resolve({ value: String(REMIND_DAYS) });
+      }
+      if (where.key === 'muted_remind_days') {
+        return Promise.resolve({ value: String(MUTED_REMIND_DAYS) });
       }
       return Promise.resolve(null);
     });
@@ -324,9 +392,9 @@ describe('runDailyCheck', () => {
 
     await runDailyCheck();
 
-    expect(mockLoggerError).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: '8' }),
-      expect.stringContaining('failed to send'),
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: '8' }),
+      'Failed to send throttled message',
     );
     expect(mockSendMessage).toHaveBeenCalledTimes(2);
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
@@ -365,5 +433,286 @@ describe('runDailyCheck', () => {
     const releaseLockCalls = fixtureState.queryRawCalls.filter((sql) => sql.includes('RELEASE_LOCK')).length;
     expect(releaseLockCalls).toBe(1);
     expect(fixtureState.lockHeld).toBe(false);
+  });
+
+  it('marks an active reminder and a muted reminder candidate in the same run', async () => {
+    const activeCandidate = makeUser({
+      id: BigInt(20),
+      username: 'dave',
+      expiresAt: new Date(NOW.getTime() + REMIND_DAYS * MS_PER_DAY),
+    });
+    const mutedCandidate = makeUser({
+      id: BigInt(21),
+      username: 'erin',
+      status: 'MUTED',
+      mutedAt: new Date(NOW.getTime() - MUTED_REMIND_DAYS * MS_PER_DAY),
+    });
+    fixtureState.users = [activeCandidate, mutedCandidate];
+
+    await runDailyCheck();
+
+    expect(activeCandidate.reminderSentAt?.getTime()).toBe(NOW.getTime());
+    expect(mutedCandidate.lastMutedRemindAt?.getTime()).toBe(NOW.getTime());
+    expect(mockLoggerInfo).toHaveBeenCalledWith(
+      { activeReminders: 1, mutedReminders: 1 },
+      'daily check: reminder candidates selected',
+    );
+  });
+
+  it('does not send a muted reminder to a user muted for the first time in this same run', async () => {
+    // expiresAt in the past => gets muted by part 1 with mutedAt = NOW; the muted-reminder
+    // window (mutedAt <= now - mutedRemindDays) must not match a mutedAt of exactly `now`.
+    const freshlyMuted = makeUser({
+      id: BigInt(22),
+      expiresAt: new Date(NOW.getTime() - 1000),
+    });
+    fixtureState.users = [freshlyMuted];
+
+    await runDailyCheck();
+
+    expect(freshlyMuted.status).toBe('MUTED');
+    expect(freshlyMuted.mutedAt?.getTime()).toBe(NOW.getTime());
+    expect(freshlyMuted.lastMutedRemindAt).toBeNull();
+    expect(mockLoggerInfo).toHaveBeenCalledWith(
+      { activeReminders: 0, mutedReminders: 0 },
+      'daily check: reminder candidates selected',
+    );
+  });
+
+  it('skips active reminders (but keeps mute + muted reminders working) when remind_days is invalid', async () => {
+    mockSettingFindUnique.mockImplementation(({ where }) => {
+      if (where.key === 'price') {
+        return Promise.resolve({ value: '990' });
+      }
+      if (where.key === 'period_days') {
+        return Promise.resolve({ value: '30' });
+      }
+      if (where.key === 'remind_days') {
+        return Promise.resolve({ value: '0' });
+      }
+      if (where.key === 'muted_remind_days') {
+        return Promise.resolve({ value: String(MUTED_REMIND_DAYS) });
+      }
+      return Promise.resolve(null);
+    });
+
+    const activeCandidate = makeUser({
+      id: BigInt(23),
+      expiresAt: new Date(NOW.getTime() + REMIND_DAYS * MS_PER_DAY),
+    });
+    const mutedCandidate = makeUser({
+      id: BigInt(24),
+      status: 'MUTED',
+      mutedAt: new Date(NOW.getTime() - MUTED_REMIND_DAYS * MS_PER_DAY),
+    });
+    fixtureState.users = [activeCandidate, mutedCandidate];
+
+    await runDailyCheck();
+
+    expect(activeCandidate.reminderSentAt).toBeNull();
+    expect(mutedCandidate.lastMutedRemindAt?.getTime()).toBe(NOW.getTime());
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      { key: 'remind_days' },
+      'daily check: remind_days setting invalid/missing, skipping active reminders this run',
+    );
+  });
+
+  it('skips muted reminders (but keeps mute + active reminders working) when muted_remind_days is missing', async () => {
+    mockSettingFindUnique.mockImplementation(({ where }) => {
+      if (where.key === 'price') {
+        return Promise.resolve({ value: '990' });
+      }
+      if (where.key === 'period_days') {
+        return Promise.resolve({ value: '30' });
+      }
+      if (where.key === 'remind_days') {
+        return Promise.resolve({ value: String(REMIND_DAYS) });
+      }
+      return Promise.resolve(null);
+    });
+
+    const activeCandidate = makeUser({
+      id: BigInt(25),
+      expiresAt: new Date(NOW.getTime() + REMIND_DAYS * MS_PER_DAY),
+    });
+    const mutedCandidate = makeUser({
+      id: BigInt(26),
+      status: 'MUTED',
+      mutedAt: new Date(NOW.getTime() - MUTED_REMIND_DAYS * MS_PER_DAY),
+    });
+    fixtureState.users = [activeCandidate, mutedCandidate];
+
+    await runDailyCheck();
+
+    expect(activeCandidate.reminderSentAt?.getTime()).toBe(NOW.getTime());
+    expect(mutedCandidate.lastMutedRemindAt).toBeNull();
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      { key: 'muted_remind_days' },
+      'daily check: muted_remind_days setting invalid/missing, skipping muted reminders this run',
+    );
+  });
+
+  it('never selects a CommonAccess-only user (status NEW) for either reminder type', async () => {
+    const user = makeUser({
+      id: BigInt(27),
+      status: 'NEW',
+      expiresAt: new Date(NOW.getTime() + REMIND_DAYS * MS_PER_DAY),
+      mutedAt: new Date(NOW.getTime() - MUTED_REMIND_DAYS * MS_PER_DAY),
+    });
+    fixtureState.users = [user];
+
+    await runDailyCheck();
+
+    expect(user.reminderSentAt).toBeNull();
+    expect(user.lastMutedRemindAt).toBeNull();
+    expect(mockLoggerInfo).toHaveBeenCalledWith(
+      { activeReminders: 0, mutedReminders: 0 },
+      'daily check: reminder candidates selected',
+    );
+  });
+
+  it('sends an active reminder with a payment-link keyboard and counts it in the summary', async () => {
+    const activeCandidate = makeUser({
+      id: BigInt(30),
+      username: 'dave',
+      expiresAt: new Date(NOW.getTime() + REMIND_DAYS * MS_PER_DAY),
+    });
+    fixtureState.users = [activeCandidate];
+
+    await runDailyCheck();
+
+    expect(activeCandidate.reminderSentAt?.getTime()).toBe(NOW.getTime());
+    expect(mockSendMessage).toHaveBeenCalledOnce();
+    const [chatId, text, sendOptions] = mockSendMessage.mock.calls[0] ?? [];
+    expect(chatId).toBe('30');
+    expect(text).toContain(String(REMIND_DAYS));
+    expect((sendOptions as { reply_markup?: unknown })?.reply_markup).toBeDefined();
+
+    expect(mockNotifyAdmins).toHaveBeenCalledOnce();
+    const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
+    expect(summary).toContain('Напоминаний отправлено: активным 1, замьюченным 0');
+  });
+
+  it('sends a muted reminder with a payment-link keyboard and counts it in the summary', async () => {
+    const mutedCandidate = makeUser({
+      id: BigInt(31),
+      username: 'erin',
+      status: 'MUTED',
+      mutedAt: new Date(NOW.getTime() - MUTED_REMIND_DAYS * MS_PER_DAY),
+    });
+    fixtureState.users = [mutedCandidate];
+
+    await runDailyCheck();
+
+    expect(mutedCandidate.lastMutedRemindAt?.getTime()).toBe(NOW.getTime());
+    expect(mockSendMessage).toHaveBeenCalledOnce();
+    const [chatId, , sendOptions] = mockSendMessage.mock.calls[0] ?? [];
+    expect(chatId).toBe('31');
+    expect((sendOptions as { reply_markup?: unknown })?.reply_markup).toBeDefined();
+
+    expect(mockNotifyAdmins).toHaveBeenCalledOnce();
+    const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
+    expect(summary).toContain('Напоминаний отправлено: активным 0, замьюченным 1');
+  });
+
+  it('summary contains zero reminder counters when nothing is selected', async () => {
+    fixtureState.users = [];
+
+    await runDailyCheck();
+
+    expect(mockNotifyAdmins).toHaveBeenCalledOnce();
+    const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
+    expect(summary).toContain('Напоминаний отправлено: активным 0, замьюченным 0');
+  });
+
+  it('does not send any message to a CommonAccess-only user (status NEW)', async () => {
+    const user = makeUser({
+      id: BigInt(32),
+      status: 'NEW',
+      expiresAt: new Date(NOW.getTime() + REMIND_DAYS * MS_PER_DAY),
+      mutedAt: new Date(NOW.getTime() - MUTED_REMIND_DAYS * MS_PER_DAY),
+    });
+    fixtureState.users = [user];
+
+    await runDailyCheck();
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('skips generating a reminder payment link failure without interrupting other candidates, and flags stay set', async () => {
+    const activeCandidate = makeUser({
+      id: BigInt(33),
+      expiresAt: new Date(NOW.getTime() + REMIND_DAYS * MS_PER_DAY),
+    });
+    const mutedCandidate = makeUser({
+      id: BigInt(34),
+      status: 'MUTED',
+      mutedAt: new Date(NOW.getTime() - MUTED_REMIND_DAYS * MS_PER_DAY),
+    });
+    fixtureState.users = [activeCandidate, mutedCandidate];
+
+    mockSettingFindUnique.mockImplementation(({ where }) => {
+      if (where.key === 'price') {
+        return Promise.resolve(null);
+      }
+      if (where.key === 'period_days') {
+        return Promise.resolve({ value: '30' });
+      }
+      if (where.key === 'remind_days') {
+        return Promise.resolve({ value: String(REMIND_DAYS) });
+      }
+      if (where.key === 'muted_remind_days') {
+        return Promise.resolve({ value: String(MUTED_REMIND_DAYS) });
+      }
+      return Promise.resolve(null);
+    });
+
+    await runDailyCheck();
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(activeCandidate.reminderSentAt?.getTime()).toBe(NOW.getTime());
+    expect(mutedCandidate.lastMutedRemindAt?.getTime()).toBe(NOW.getTime());
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: '33' }),
+      'daily check: subscription price/period settings unavailable, active reminder not sent',
+    );
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: '34' }),
+      'daily check: subscription price/period settings unavailable, muted reminder not sent',
+    );
+
+    expect(mockNotifyAdmins).toHaveBeenCalledOnce();
+    const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
+    expect(summary).toContain('Напоминаний отправлено: активным 0, замьюченным 0');
+  });
+
+  it('continues sending reminders to remaining candidates when sendMessage fails for one', async () => {
+    const activeCandidate = makeUser({
+      id: BigInt(35),
+      expiresAt: new Date(NOW.getTime() + REMIND_DAYS * MS_PER_DAY),
+    });
+    const mutedCandidate = makeUser({
+      id: BigInt(36),
+      status: 'MUTED',
+      mutedAt: new Date(NOW.getTime() - MUTED_REMIND_DAYS * MS_PER_DAY),
+    });
+    fixtureState.users = [activeCandidate, mutedCandidate];
+
+    mockSendMessage.mockImplementation((chatId: string) => {
+      if (chatId === '35') {
+        return Promise.reject(new Error('telegram sendMessage failed'));
+      }
+      return Promise.resolve({});
+    });
+
+    await runDailyCheck();
+
+    // Flags stay set even though the send failed (best-effort, decision #D).
+    expect(activeCandidate.reminderSentAt?.getTime()).toBe(NOW.getTime());
+    expect(mutedCandidate.lastMutedRemindAt?.getTime()).toBe(NOW.getTime());
+
+    expect(mockNotifyAdmins).toHaveBeenCalledOnce();
+    const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
+    expect(summary).toContain('Напоминаний отправлено: активным 0, замьюченным 1');
   });
 });

@@ -103,6 +103,17 @@ export async function unmuteUserAfterPayment(userId: bigint): Promise<boolean> {
   }
 }
 
+export async function readPositiveIntSetting(key: string): Promise<number | null> {
+  const setting = await prisma.setting.findUnique({ where: { key } });
+  const value = setting?.value;
+
+  if (!value || !PERIOD_DAYS_PATTERN.test(value) || Number(value) <= 0) {
+    return null;
+  }
+
+  return Number(value);
+}
+
 export type SubscriptionPaymentLink = {
   paymentUrl: string;
   amount: string;
@@ -165,6 +176,91 @@ export async function muteExpiredUser(
   return updated.count === 1;
 }
 
+export type ReminderCandidate = {
+  id: bigint;
+  username: string | null;
+};
+
+/**
+ * Same atomic-guard shape as `muteExpiredUser`: select candidates, then re-check the full
+ * guard condition per id in `updateMany`'s `where`. A plain `updateMany({ where: { id: { in } } })`
+ * would not re-verify status/expiresAt/flag at write time, so a concurrent payment transaction
+ * committing between the select and the write (a different GET_LOCK domain) could still get
+ * marked/reminded here.
+ */
+export async function selectAndMarkActiveReminders(
+  tx: Prisma.TransactionClient,
+  now: Date,
+  remindDays: number,
+): Promise<ReminderCandidate[]> {
+  const windowEnd = new Date(now.getTime() + remindDays * MS_PER_DAY);
+  const guard: Prisma.UserWhereInput = {
+    status: UserStatus.ACTIVE,
+    expiresAt: { gt: now, lte: windowEnd },
+    reminderSentAt: null,
+  };
+
+  const candidates = await tx.user.findMany({
+    where: guard,
+    select: { id: true, username: true },
+  });
+
+  const marked: ReminderCandidate[] = [];
+
+  for (const candidate of candidates) {
+    const updated = await tx.user.updateMany({
+      where: { ...guard, id: candidate.id },
+      data: { reminderSentAt: now },
+    });
+
+    if (updated.count === 1) {
+      marked.push(candidate);
+    }
+  }
+
+  return marked;
+}
+
+function buildMutedReminderDueGuard(now: Date, mutedRemindDays: number): Prisma.UserWhereInput {
+  const threshold = new Date(now.getTime() - mutedRemindDays * MS_PER_DAY);
+
+  return {
+    status: UserStatus.MUTED,
+    OR: [
+      { lastMutedRemindAt: null, mutedAt: { lte: threshold } },
+      { lastMutedRemindAt: { lte: threshold } },
+    ],
+  };
+}
+
+export async function selectAndMarkMutedReminders(
+  tx: Prisma.TransactionClient,
+  now: Date,
+  mutedRemindDays: number,
+): Promise<ReminderCandidate[]> {
+  const guard = buildMutedReminderDueGuard(now, mutedRemindDays);
+
+  const candidates = await tx.user.findMany({
+    where: guard,
+    select: { id: true, username: true },
+  });
+
+  const marked: ReminderCandidate[] = [];
+
+  for (const candidate of candidates) {
+    const updated = await tx.user.updateMany({
+      where: { ...guard, id: candidate.id },
+      data: { lastMutedRemindAt: now },
+    });
+
+    if (updated.count === 1) {
+      marked.push(candidate);
+    }
+  }
+
+  return marked;
+}
+
 export async function restrictExpiredUser(userId: bigint): Promise<boolean> {
   try {
     await subscriptionBot.api.restrictChatMember(config.GROUP_ID.toString(), Number(userId), {
@@ -187,6 +283,14 @@ export function formatUserMention(username: string | null, userId: bigint): stri
 
 function formatExpiresAt(date: Date): string {
   return date.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
+}
+
+export function buildActiveReminderMessage(remindDays: number): string {
+  return `Ваша подписка на закрытую группу истекает через ${remindDays} дн. Оплатите продление, чтобы не потерять доступ.`;
+}
+
+export function buildMutedReminderMessage(): string {
+  return 'Доступ к закрытой группе всё ещё ограничен из-за неоплаченной подписки. Оплатите, чтобы восстановить доступ.';
 }
 
 function resolveGroupId(product: ProductType): bigint {

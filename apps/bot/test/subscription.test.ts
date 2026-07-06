@@ -85,8 +85,11 @@ import {
   createSubscriptionPaymentLink,
   grantAccessAfterPayment,
   muteExpiredUser,
+  readPositiveIntSetting,
   resendCommonAccessInviteLink,
   restrictExpiredUser,
+  selectAndMarkActiveReminders,
+  selectAndMarkMutedReminders,
   unmuteUserAfterPayment,
 } from '../src/services/subscription.js';
 
@@ -473,5 +476,399 @@ describe('unmuteUserAfterPayment', () => {
       expect.objectContaining({ userId: TEST_USER_ID.toString() }),
       'payment: failed to unmute user after payment',
     );
+  });
+});
+
+describe('readPositiveIntSetting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns the parsed number for a valid positive integer setting', async () => {
+    mockSettingFindUnique.mockResolvedValue({ value: '10' });
+
+    const result = await readPositiveIntSetting('muted_remind_days');
+
+    expect(result).toBe(10);
+  });
+
+  it('returns null when the setting is missing', async () => {
+    mockSettingFindUnique.mockResolvedValue(null);
+
+    const result = await readPositiveIntSetting('remind_days');
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null when the setting is zero', async () => {
+    mockSettingFindUnique.mockResolvedValue({ value: '0' });
+
+    const result = await readPositiveIntSetting('remind_days');
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null when the setting is not an integer', async () => {
+    mockSettingFindUnique.mockResolvedValue({ value: '3.5' });
+
+    const result = await readPositiveIntSetting('remind_days');
+
+    expect(result).toBeNull();
+  });
+});
+
+// In-memory fake standing in for the MySQL row set (same rationale as dailyCheck.test.ts): the
+// atomic per-id guard re-check must be exercised against real mutable state, not just asserted
+// on call args, so a concurrent write between findMany and updateMany is actually observable.
+type ReminderFixtureUser = {
+  id: bigint;
+  username: string | null;
+  status: string;
+  expiresAt: Date | null;
+  mutedAt: Date | null;
+  lastMutedRemindAt: Date | null;
+  reminderSentAt: Date | null;
+};
+
+type FieldCondition = { gt?: Date; lte?: Date } | Date | string | null;
+
+type WhereClause = {
+  OR?: WhereClause[];
+  id?: bigint;
+  status?: string;
+  expiresAt?: FieldCondition;
+  mutedAt?: FieldCondition;
+  lastMutedRemindAt?: FieldCondition;
+  reminderSentAt?: FieldCondition;
+};
+
+function matchesField(value: Date | null, condition: FieldCondition): boolean {
+  if (condition === null) {
+    return value === null;
+  }
+  if (condition instanceof Date) {
+    return value !== null && value.getTime() === condition.getTime();
+  }
+  if (typeof condition === 'object') {
+    if (condition.gt && !(value !== null && value.getTime() > condition.gt.getTime())) {
+      return false;
+    }
+    if (condition.lte && !(value !== null && value.getTime() <= condition.lte.getTime())) {
+      return false;
+    }
+    return true;
+  }
+  return true;
+}
+
+function matchesWhere(user: ReminderFixtureUser, where: WhereClause): boolean {
+  if (where.OR && !where.OR.some((clause) => matchesWhere(user, clause))) {
+    return false;
+  }
+  if (where.id !== undefined && user.id !== where.id) {
+    return false;
+  }
+  if (where.status !== undefined && user.status !== where.status) {
+    return false;
+  }
+  if (where.expiresAt !== undefined && !matchesField(user.expiresAt, where.expiresAt)) {
+    return false;
+  }
+  if (where.mutedAt !== undefined && !matchesField(user.mutedAt, where.mutedAt)) {
+    return false;
+  }
+  if (
+    where.lastMutedRemindAt !== undefined &&
+    !matchesField(user.lastMutedRemindAt, where.lastMutedRemindAt)
+  ) {
+    return false;
+  }
+  if (
+    where.reminderSentAt !== undefined &&
+    !matchesField(user.reminderSentAt, where.reminderSentAt)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function createReminderTx(users: ReminderFixtureUser[], onFindMany?: () => void) {
+  const findMany = vi.fn((args: { where: WhereClause }) => {
+    const matched = users
+      .filter((u) => matchesWhere(u, args.where))
+      .map((u) => ({ id: u.id, username: u.username }));
+    onFindMany?.();
+    return Promise.resolve(matched);
+  });
+
+  const updateMany = vi.fn((args: { where: WhereClause; data: Record<string, unknown> }) => {
+    const user = users.find((u) => matchesWhere(u, args.where));
+    if (!user) {
+      return Promise.resolve({ count: 0 });
+    }
+    Object.assign(user, args.data);
+    return Promise.resolve({ count: 1 });
+  });
+
+  return { user: { findMany, updateMany } };
+}
+
+function makeReminderUser(
+  overrides: Partial<ReminderFixtureUser> & { id: bigint },
+): ReminderFixtureUser {
+  return {
+    username: null,
+    status: 'ACTIVE',
+    expiresAt: null,
+    mutedAt: null,
+    lastMutedRemindAt: null,
+    reminderSentAt: null,
+    ...overrides,
+  };
+}
+
+describe('selectAndMarkActiveReminders', () => {
+  const now = new Date('2026-01-15T12:00:00.000Z');
+  const REMIND_DAYS = 3;
+
+  it('selects a user expiring in exactly remindDays and marks reminderSentAt', async () => {
+    const user = makeReminderUser({
+      id: BigInt(1),
+      username: 'alice',
+      expiresAt: new Date(now.getTime() + REMIND_DAYS * MS_PER_DAY),
+    });
+    const tx = createReminderTx([user]);
+
+    const result = await selectAndMarkActiveReminders(
+      tx as unknown as Parameters<typeof selectAndMarkActiveReminders>[0],
+      now,
+      REMIND_DAYS,
+    );
+
+    expect(result).toEqual([{ id: BigInt(1), username: 'alice' }]);
+    expect(user.reminderSentAt?.getTime()).toBe(now.getTime());
+  });
+
+  it('does not select a user expiring in remindDays + 1 day', async () => {
+    const user = makeReminderUser({
+      id: BigInt(2),
+      expiresAt: new Date(now.getTime() + (REMIND_DAYS + 1) * MS_PER_DAY),
+    });
+    const tx = createReminderTx([user]);
+
+    const result = await selectAndMarkActiveReminders(
+      tx as unknown as Parameters<typeof selectAndMarkActiveReminders>[0],
+      now,
+      REMIND_DAYS,
+    );
+
+    expect(result).toEqual([]);
+    expect(user.reminderSentAt).toBeNull();
+  });
+
+  it('does not reselect a user whose reminderSentAt is already set this period', async () => {
+    const user = makeReminderUser({
+      id: BigInt(3),
+      expiresAt: new Date(now.getTime() + REMIND_DAYS * MS_PER_DAY),
+      reminderSentAt: new Date(now.getTime() - MS_PER_DAY),
+    });
+    const tx = createReminderTx([user]);
+
+    const result = await selectAndMarkActiveReminders(
+      tx as unknown as Parameters<typeof selectAndMarkActiveReminders>[0],
+      now,
+      REMIND_DAYS,
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  it('does not select a user already past expiresAt (mute zone, not reminder zone)', async () => {
+    const user = makeReminderUser({
+      id: BigInt(4),
+      expiresAt: new Date(now.getTime() - 1000),
+    });
+    const tx = createReminderTx([user]);
+
+    const result = await selectAndMarkActiveReminders(
+      tx as unknown as Parameters<typeof selectAndMarkActiveReminders>[0],
+      now,
+      REMIND_DAYS,
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  it('does not select a MUTED / CommonAccess-only user regardless of expiresAt', async () => {
+    const user = makeReminderUser({
+      id: BigInt(5),
+      status: 'MUTED',
+      expiresAt: new Date(now.getTime() + REMIND_DAYS * MS_PER_DAY),
+    });
+    const tx = createReminderTx([user]);
+
+    const result = await selectAndMarkActiveReminders(
+      tx as unknown as Parameters<typeof selectAndMarkActiveReminders>[0],
+      now,
+      REMIND_DAYS,
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  it('excludes a candidate whose guard no longer matches by the time updateMany runs (concurrent payment)', async () => {
+    const user = makeReminderUser({
+      id: BigInt(6),
+      expiresAt: new Date(now.getTime() + REMIND_DAYS * MS_PER_DAY),
+    });
+    const tx = createReminderTx([user], () => {
+      // Simulates a concurrent payment transaction committing between the SELECT and this
+      // function's per-id UPDATE: applyPayment resets reminderSentAt but extends expiresAt
+      // well past the reminder window.
+      user.expiresAt = new Date(now.getTime() + 30 * MS_PER_DAY);
+    });
+
+    const result = await selectAndMarkActiveReminders(
+      tx as unknown as Parameters<typeof selectAndMarkActiveReminders>[0],
+      now,
+      REMIND_DAYS,
+    );
+
+    expect(result).toEqual([]);
+    expect(user.reminderSentAt).toBeNull();
+  });
+});
+
+describe('selectAndMarkMutedReminders', () => {
+  const now = new Date('2026-01-15T12:00:00.000Z');
+  const MUTED_REMIND_DAYS = 10;
+
+  it('selects a user muted exactly mutedRemindDays ago with no prior reminder', async () => {
+    const user = makeReminderUser({
+      id: BigInt(11),
+      username: 'bob',
+      status: 'MUTED',
+      mutedAt: new Date(now.getTime() - MUTED_REMIND_DAYS * MS_PER_DAY),
+    });
+    const tx = createReminderTx([user]);
+
+    const result = await selectAndMarkMutedReminders(
+      tx as unknown as Parameters<typeof selectAndMarkMutedReminders>[0],
+      now,
+      MUTED_REMIND_DAYS,
+    );
+
+    expect(result).toEqual([{ id: BigInt(11), username: 'bob' }]);
+    expect(user.lastMutedRemindAt?.getTime()).toBe(now.getTime());
+  });
+
+  it('does not select a user muted 9 days ago', async () => {
+    const user = makeReminderUser({
+      id: BigInt(12),
+      status: 'MUTED',
+      mutedAt: new Date(now.getTime() - 9 * MS_PER_DAY),
+    });
+    const tx = createReminderTx([user]);
+
+    const result = await selectAndMarkMutedReminders(
+      tx as unknown as Parameters<typeof selectAndMarkMutedReminders>[0],
+      now,
+      MUTED_REMIND_DAYS,
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  it('does not select a freshly muted user from the same run (mutedAt = now)', async () => {
+    const user = makeReminderUser({
+      id: BigInt(13),
+      status: 'MUTED',
+      mutedAt: new Date(now.getTime()),
+    });
+    const tx = createReminderTx([user]);
+
+    const result = await selectAndMarkMutedReminders(
+      tx as unknown as Parameters<typeof selectAndMarkMutedReminders>[0],
+      now,
+      MUTED_REMIND_DAYS,
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  it('reselects a user another mutedRemindDays after the last reminder (20 days, cycle repeats)', async () => {
+    const user = makeReminderUser({
+      id: BigInt(14),
+      status: 'MUTED',
+      mutedAt: new Date(now.getTime() - 20 * MS_PER_DAY),
+      lastMutedRemindAt: new Date(now.getTime() - MUTED_REMIND_DAYS * MS_PER_DAY),
+    });
+    const tx = createReminderTx([user]);
+
+    const result = await selectAndMarkMutedReminders(
+      tx as unknown as Parameters<typeof selectAndMarkMutedReminders>[0],
+      now,
+      MUTED_REMIND_DAYS,
+    );
+
+    expect(result).toEqual([{ id: BigInt(14), username: null }]);
+    expect(user.lastMutedRemindAt?.getTime()).toBe(now.getTime());
+  });
+
+  it('does not reselect a user only 9 days after the last reminder', async () => {
+    const user = makeReminderUser({
+      id: BigInt(15),
+      status: 'MUTED',
+      mutedAt: new Date(now.getTime() - 20 * MS_PER_DAY),
+      lastMutedRemindAt: new Date(now.getTime() - 9 * MS_PER_DAY),
+    });
+    const tx = createReminderTx([user]);
+
+    const result = await selectAndMarkMutedReminders(
+      tx as unknown as Parameters<typeof selectAndMarkMutedReminders>[0],
+      now,
+      MUTED_REMIND_DAYS,
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  it('does not select an ACTIVE / CommonAccess-only user regardless of mutedAt', async () => {
+    const user = makeReminderUser({
+      id: BigInt(16),
+      status: 'ACTIVE',
+      mutedAt: new Date(now.getTime() - MUTED_REMIND_DAYS * MS_PER_DAY),
+    });
+    const tx = createReminderTx([user]);
+
+    const result = await selectAndMarkMutedReminders(
+      tx as unknown as Parameters<typeof selectAndMarkMutedReminders>[0],
+      now,
+      MUTED_REMIND_DAYS,
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  it('excludes a candidate whose guard no longer matches by the time updateMany runs (concurrent payment)', async () => {
+    const user = makeReminderUser({
+      id: BigInt(17),
+      status: 'MUTED',
+      mutedAt: new Date(now.getTime() - MUTED_REMIND_DAYS * MS_PER_DAY),
+    });
+    const tx = createReminderTx([user], () => {
+      // Simulates applyPayment committing between the SELECT and this function's per-id
+      // UPDATE: the user is unmuted, so the MUTED guard no longer matches.
+      user.status = 'ACTIVE';
+    });
+
+    const result = await selectAndMarkMutedReminders(
+      tx as unknown as Parameters<typeof selectAndMarkMutedReminders>[0],
+      now,
+      MUTED_REMIND_DAYS,
+    );
+
+    expect(result).toEqual([]);
+    expect(user.lastMutedRemindAt).toBeNull();
   });
 });

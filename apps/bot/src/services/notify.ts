@@ -1,5 +1,5 @@
 import { prisma } from '@tg-bot/db';
-import { Bot, GrammyError, HttpError } from 'grammy';
+import { Bot, GrammyError, HttpError, type InlineKeyboard } from 'grammy';
 
 import { logger } from '../logger.js';
 
@@ -12,6 +12,16 @@ const defaultDelay = (ms: number): Promise<void> =>
   });
 
 export type SendThrottledTextMessagesOptions = {
+  delay?: (ms: number) => Promise<void>;
+};
+
+export type PersonalMessage = {
+  chatId: bigint;
+  text: string;
+  reply_markup?: InlineKeyboard;
+};
+
+export type SendThrottledPersonalMessagesOptions = {
   delay?: (ms: number) => Promise<void>;
 };
 
@@ -49,6 +59,37 @@ function logSendError(chatId: bigint, err: unknown): void {
     },
     'Failed to send throttled message',
   );
+}
+
+export async function sendThrottledPersonalMessages(
+  bot: Bot,
+  items: readonly PersonalMessage[],
+  options: SendThrottledPersonalMessagesOptions = {},
+): Promise<number> {
+  const delayFn = options.delay ?? defaultDelay;
+  let successCount = 0;
+
+  for (let i = 0; i < items.length; i += 1) {
+    if (i > 0) {
+      await delayFn(THROTTLE_INTERVAL_MS);
+    }
+
+    const item = items[i]!;
+    const chatIdStr = formatChatId(item.chatId);
+
+    try {
+      await bot.api.sendMessage(
+        chatIdStr,
+        item.text,
+        item.reply_markup !== undefined ? { reply_markup: item.reply_markup } : undefined,
+      );
+      successCount += 1;
+    } catch (err) {
+      logSendError(item.chatId, err);
+    }
+  }
+
+  return successCount;
 }
 
 export async function sendThrottledTextMessages(

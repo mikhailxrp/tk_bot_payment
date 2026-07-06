@@ -4,6 +4,120 @@
 
 ---
 
+## 2026-07-07 — TASK.md (Task 7.4): ревью автотестов Task 7.1–7.3, подготовка к ручной проверке
+
+**Фаза:** 7 — Напоминания (оба типа, только закрытая группа). **Таск:** 7.4 «Тесты +
+ручная проверка матрицы дат».
+
+**Что сделано:**
+
+- Финальное ревью `apps/bot/test/notify.test.ts`, `subscription.test.ts`, `dailyCheck.test.ts`
+  против DoD Task 7.1–7.3 и `dod-global.md` (Cron/конкурентность) — реальных пробелов не
+  найдено; новые тесты не добавлялись.
+- Покрытие подтверждено: граничные даты активных (4д/3д/повтор) и замьюченных
+  (9д/10д/20д/9д-после-напоминания); `CommonAccess`-only для обоих типов; конкурентный
+  `GET_LOCK`-прогон и конкурентная оплата между `SELECT` и per-id `UPDATE`; best-effort при
+  сбое `sendMessage`/генерации ссылки/`restrictChatMember`; невалидные `remind_days`/
+  `muted_remind_days`; флаги исключают повтор и сбрасываются при оплате (Task 7.2/Фаза 3).
+- Обновлена документация фазы: `phase-7.md` (Task 7.4 — автотесты/ревью ✅), `_status.md`.
+
+**Проверки:** `npm test` 138/138, `npm run type-check`, `npm run lint` — чисто.
+
+**Статус:** Task 7.4 — автотесты и ревью ✅; остаётся ручная проверка матрицы дат на живом
+боте (активные 4д/3д/повтор, замьюченные 9д/10д/−10д, `CommonAccess`-only, сброс флагов при
+оплате) → PR `phase-7` → `dev` после подтверждения.
+
+## 2026-07-07 — TASK.md (Task 7.3): отправка напоминаний после коммита + сводка со счётчиками
+
+**Фаза:** 7 — Напоминания (оба типа, только закрытая группа). **Таск:** 7.3 «Отправка
+напоминаний после коммита + сводка со счётчиками».
+
+**Что сделано:**
+
+- `apps/bot/src/services/subscription.ts`: `buildActiveReminderMessage(remindDays)` и
+  `buildMutedReminderMessage()` — тексты напоминаний рядом с `formatUserMention`/`formatExpiresAt`;
+  схема/БД не менялись.
+- `apps/bot/src/jobs/dailyCheck.ts`: после коммита транзакции (best-effort, как mute part-1) —
+  для каждого `outcome.activeReminders` и `outcome.mutedReminders` персональная ссылка
+  (`createSubscriptionPaymentLink` + `paymentKeyboard`); `link === null` → `logger.warn` + skip
+  (паттерн mute-сообщений); отправка тремя отдельными вызовами `sendThrottledPersonalMessages`
+  (mute / active / muted); `buildSummary` расширен строкой «Напоминаний отправлено: активным X,
+  замьюченным Y» — X/Y из return-значений sender, не из `outcome.*.length` (решение #F).
+- `apps/bot/test/dailyCheck.test.ts`: +6 тестов — активный/замьюченный кандидат получает сообщение
+  с кнопкой оплаты; сводка с нулевыми счётчиками; `CommonAccess`-only (status NEW) не получает
+  сообщений; сбой генерации ссылки и сбой `sendMessage` одному не прерывают остальных и не
+  откатывают флаги (best-effort, решение #D).
+
+**Проверки:** `npm run type-check` — чисто.
+
+**Статус:** Task 7.3 ✅. Следующий — Task 7.4 (ревью автотестов + ручная проверка матрицы дат).
+
+## 2026-07-07 — TASK.md (Task 7.2): отбор кандидатов напоминаний + флаги в транзакции
+
+**Фаза:** 7 — Напоминания (оба типа, только закрытая группа). **Таск:** 7.2 «Отбор кандидатов
+напоминаний + проставление флагов в транзакции».
+
+**Найденная перед реализацией проблема:** в `phase-7.md` не было специфицировано поведение при
+невалидном/отсутствующем `Setting.remind_days`/`muted_remind_days`. Решение (подтверждено
+пользователем, зафиксировано в `phase-7.md` как #G): пропустить соответствующий тип напоминаний
+в этом прогоне с warning-логом, mute part-1 и другой тип напоминаний не затрагиваются.
+
+**Что сделано:**
+
+- `apps/bot/src/services/subscription.ts`: `readPositiveIntSetting(key)` — читает и валидирует
+  положительное целое из `Setting` (переиспользует `PERIOD_DAYS_PATTERN`); тип `ReminderCandidate`
+  (заменил локальный `DailyCheckCandidate` в `dailyCheck.ts`); `selectAndMarkActiveReminders(tx,
+  now, remindDays)` и `selectAndMarkMutedReminders(tx, now, mutedRemindDays)` — отбор через
+  `findMany` с guard-условием, затем поэлементный атомарный `updateMany` с тем же guard в `where`
+  (по образцу `muteExpiredUser`), не пакетный `updateMany({ where: { id: { in } } })` — защита от
+  гонки с параллельной транзакцией оплаты между `SELECT` и `UPDATE`. Условие замьюченных —
+  `OR`-ветка (`lastMutedRemindAt IS NULL AND mutedAt <= порог` ИЛИ `lastMutedRemindAt <= порог`),
+  без `COALESCE` (Prisma API его не даёт).
+- `apps/bot/src/jobs/dailyCheck.ts`: перед транзакцией — чтение и валидация `remind_days`/
+  `muted_remind_days`; внутри `$transaction`, после mute части 1 и до `releaseLock`, вызов обеих
+  функций отбора (только если настройка валидна); `DailyCheckOutcome` расширен `activeReminders`/
+  `mutedReminders`; лог `daily check: reminder candidates selected` со счётчиками (сама отправка —
+  Task 7.3).
+- `apps/bot/test/subscription.test.ts`: +23 теста (`readPositiveIntSetting`,
+  `selectAndMarkActiveReminders`, `selectAndMarkMutedReminders`) со stateful fake `tx` —
+  граничные даты (4/3 дня, 9/10/20 дней), `CommonAccess`-only, конкурентная оплата между `SELECT`
+  и `UPDATE` (guard не совпадает на момент записи → кандидат исключается).
+- `apps/bot/test/dailyCheck.test.ts`: generic `matchesWhere`-фейк для `tx.user.findMany`/
+  `updateMany` (поддержка `OR`/`gt`/`lte`/`null`); +5 тестов (оба типа в одном прогоне; свежезамью-
+  ченный не получает напоминание замьюченным; пропуск типа при невалидной настройке — оба
+  направления; `CommonAccess`-only не попадает ни в один список).
+
+**Проверки:** `npm test` 132/132, `npm run type-check`, `npm run lint` — чисто.
+
+**Статус:** Task 7.2 ✅. Следующий — Task 7.3 (отправка напоминаний после коммита + сводка со
+счётчиками).
+
+## 2026-07-07 — TASK.md (Task 7.1): `sendThrottledPersonalMessages` + перевод part-1 mute-рассылки
+
+**Фаза:** 7 — Напоминания (оба типа, только закрытая группа). **Таск:** 7.1 «`notify.ts`:
+троттлированный per-recipient sender + перевод part-1».
+
+**Что сделано:**
+
+- `apps/bot/src/services/notify.ts`: тип `PersonalMessage` (`chatId`, `text`, опциональный
+  `reply_markup`); `sendThrottledPersonalMessages(bot, items, options?)` — троттлинг через
+  `THROTTLE_INTERVAL_MS` (≤25 msg/sec), задержка только **между** отправками (`if (i > 0)`);
+  переиспользованы `defaultDelay` и `logSendError`; try/catch на каждый item; возвращает число
+  успешных отправок. `sendThrottledTextMessages` и `notifyAdmins` не менялись.
+- `apps/bot/src/jobs/dailyCheck.ts`: удалён `sendExpiredSubscriptionMessage`; после транзакции —
+  per-candidate `restrictExpiredUser`, сбор `PersonalMessage[]` с персональной ссылкой
+  (`createSubscriptionPaymentLink` + `paymentKeyboard`); `null`-ссылка → `logger.warn` и пропуск;
+  один вызов `sendThrottledPersonalMessages(subscriptionBot, items)`.
+- `apps/bot/test/notify.test.ts`: 5 тестов нового sender (троттлинг N−1 delay, счётчик успехов,
+  403/HttpError не прерывают батч, пустой список, `reply_markup` per-item).
+- `apps/bot/test/dailyCheck.test.ts`: partial mock `notify.js` — реальный
+  `sendThrottledPersonalMessages` с instant `delay` (fake timers); обновлена проверка ошибки
+  sendMessage → `logger.warn` из notify.
+
+**Проверки:** `npm test` 110/110, `npm run type-check`, `npm run lint` — чисто.
+
+**Статус:** Task 7.1 ✅. Следующий — Task 7.2 (отбор кандидатов напоминаний + флаги в транзакции).
+
 ## 2026-07-06 — TASK.md (Task 6.4): ревью автотестов, контрольный прогон, чеклист ручной проверки
 
 **Фаза:** 6 — Ежедневный cron: mute истёкших. **Таск:** 6.4 «Тесты + ручная проверка».
