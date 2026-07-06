@@ -17,6 +17,7 @@ import {
   ADMIN_CHECK_CALLBACK,
   ADMIN_SUMMARY_CALLBACK,
   COMMON_ACCESS_CALLBACK,
+  MENU_BUTTON_TEXT,
   RESEND_ACCESS_CALLBACK,
   SUBSCRIBE_CALLBACK,
 } from './keyboards.js';
@@ -25,6 +26,7 @@ import { isAdmin } from './middleware/isAdmin.js';
 export const bot = new Bot(config.BOT_TOKEN);
 
 bot.command('start', handleStart);
+bot.hears(MENU_BUTTON_TEXT, handleStart);
 bot.command('admin', isAdmin, handleAdmin);
 bot.callbackQuery(ADMIN_CHECK_CALLBACK, isAdmin, handleAdminCheckCallback);
 bot.callbackQuery(ADMIN_SUMMARY_CALLBACK, isAdmin, handleAdminSummaryCallback);

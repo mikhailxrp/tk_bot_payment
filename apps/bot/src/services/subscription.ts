@@ -145,11 +145,12 @@ export async function createSubscriptionPaymentLink(
 }
 
 /**
- * Atomic per-user guard against the ACTIVE+expired condition, followed by a best-effort
- * restrictChatMember. Must run on `tx` — the same connection that holds the daily-check
- * GET_LOCK — so the guard participates in that transaction. A failed restrictChatMember is
- * logged but does not flip the return value: the DB guard already committed the MUTED status,
- * which is the source of truth for whether this call actually muted the user.
+ * Atomic per-user guard against the ACTIVE+expired condition. DB-only by design: this must
+ * stay fast, since it runs inside the daily-check transaction alongside the GET_LOCK, which
+ * has a 5s interactive-transaction timeout. Telegram calls belong outside that transaction
+ * (see `restrictExpiredUser`) — putting network I/O in here previously caused the transaction
+ * to time out and roll back committed MUTED rows while the Telegram-side mute had already
+ * taken effect, desyncing DB state from reality.
  */
 export async function muteExpiredUser(
   tx: Prisma.TransactionClient,
@@ -161,19 +162,19 @@ export async function muteExpiredUser(
     data: { status: UserStatus.MUTED, mutedAt: now },
   });
 
-  if (updated.count !== 1) {
-    return false;
-  }
+  return updated.count === 1;
+}
 
+export async function restrictExpiredUser(userId: bigint): Promise<boolean> {
   try {
     await bot.api.restrictChatMember(config.GROUP_ID.toString(), Number(userId), {
       can_send_messages: false,
     });
+    return true;
   } catch (err) {
     logger.error({ err, userId: userId.toString() }, 'daily check: failed to restrictChatMember');
+    return false;
   }
-
-  return true;
 }
 
 export function formatUserMention(username: string | null, userId: bigint): string {

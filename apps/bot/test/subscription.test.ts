@@ -77,6 +77,7 @@ import {
   grantAccessAfterPayment,
   muteExpiredUser,
   resendCommonAccessInviteLink,
+  restrictExpiredUser,
   unmuteUserAfterPayment,
 } from '../src/services/subscription.js';
 
@@ -292,10 +293,9 @@ describe('muteExpiredUser', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockRestrictChatMember.mockResolvedValue({});
   });
 
-  it('mutes via restrictChatMember and returns true when the atomic guard matches exactly one row', async () => {
+  it('returns true and does not call Telegram when the atomic guard matches exactly one row', async () => {
     const tx = createTx(1);
 
     const result = await muteExpiredUser(
@@ -309,14 +309,10 @@ describe('muteExpiredUser', () => {
       where: { id: TEST_USER_ID, status: 'ACTIVE', expiresAt: { lte: now } },
       data: { status: 'MUTED', mutedAt: now },
     });
-    expect(mockRestrictChatMember).toHaveBeenCalledWith(
-      config.GROUP_ID.toString(),
-      Number(TEST_USER_ID),
-      { can_send_messages: false },
-    );
+    expect(mockRestrictChatMember).not.toHaveBeenCalled();
   });
 
-  it('returns false and does not call restrictChatMember when the guard matches no row', async () => {
+  it('returns false when the guard matches no row', async () => {
     const tx = createTx(0);
 
     const result = await muteExpiredUser(
@@ -326,20 +322,38 @@ describe('muteExpiredUser', () => {
     );
 
     expect(result).toBe(false);
-    expect(mockRestrictChatMember).not.toHaveBeenCalled();
+  });
+});
+
+describe('restrictExpiredUser', () => {
+  const TEST_USER_ID = BigInt(111222333);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRestrictChatMember.mockResolvedValue({});
   });
 
-  it('still returns true when restrictChatMember fails, since the DB guard already committed', async () => {
-    const tx = createTx(1);
-    mockRestrictChatMember.mockRejectedValue(new Error('telegram restrictChatMember failed'));
-
-    const result = await muteExpiredUser(
-      tx as unknown as Parameters<typeof muteExpiredUser>[0],
-      TEST_USER_ID,
-      now,
-    );
+  it('calls restrictChatMember and returns true on success', async () => {
+    const result = await restrictExpiredUser(TEST_USER_ID);
 
     expect(result).toBe(true);
+    expect(mockRestrictChatMember).toHaveBeenCalledWith(
+      config.GROUP_ID.toString(),
+      Number(TEST_USER_ID),
+      { can_send_messages: false },
+    );
+  });
+
+  it('logs and returns false when restrictChatMember fails', async () => {
+    mockRestrictChatMember.mockRejectedValue(new Error('telegram restrictChatMember failed'));
+
+    const result = await restrictExpiredUser(TEST_USER_ID);
+
+    expect(result).toBe(false);
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: TEST_USER_ID.toString() }),
+      expect.stringContaining('restrictChatMember'),
+    );
   });
 });
 
