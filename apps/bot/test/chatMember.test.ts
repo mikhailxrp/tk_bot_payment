@@ -19,11 +19,16 @@ vi.mock('../src/services/notify.js', () => ({
 }));
 
 vi.mock('../src/bot/bot.js', () => ({
-  bot: { api: {} },
+  subscriptionBot: { api: {}, __name: 'subscriptionBot' },
+  commonBot: { api: {}, __name: 'commonBot' },
 }));
 
 import { config } from '../src/config.js';
-import { handleChatMemberUpdate } from '../src/bot/handlers/chatMember.js';
+import { commonBot, subscriptionBot } from '../src/bot/bot.js';
+import {
+  handleCommonChatMemberUpdate,
+  handleGroupChatMemberUpdate,
+} from '../src/bot/handlers/chatMember.js';
 
 type ChatMemberStatus = 'left' | 'kicked' | 'member' | 'restricted' | 'administrator' | 'creator';
 
@@ -48,79 +53,122 @@ function buildContext(
   } as unknown as Context;
 }
 
-describe('handleChatMemberUpdate', () => {
+describe('handleGroupChatMemberUpdate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSetUserInGroup.mockResolvedValue(undefined);
-    mockSetCommonAccessInGroup.mockResolvedValue(undefined);
     mockNotifyAdmins.mockResolvedValue(undefined);
   });
 
-  it('join in GROUP_ID (left -> member) sets User.inGroup=true and notifies admins', async () => {
+  it('join (left -> member) sets User.inGroup=true and notifies admins via subscriptionBot', async () => {
     const ctx = buildContext(config.GROUP_ID, 'left', 'member');
 
-    await handleChatMemberUpdate(ctx);
+    await handleGroupChatMemberUpdate(ctx);
 
     expect(mockSetUserInGroup).toHaveBeenCalledWith(555n, true);
     expect(mockSetCommonAccessInGroup).not.toHaveBeenCalled();
     expect(mockNotifyAdmins).toHaveBeenCalledTimes(1);
+    expect(mockNotifyAdmins.mock.calls[0]?.[0]).toBe(subscriptionBot);
     expect(mockNotifyAdmins.mock.calls[0]?.[1]).toContain('закрытую группу');
-  });
-
-  it('join in COMMON_GROUP_ID (kicked -> member) sets CommonAccess.inGroup=true and notifies admins', async () => {
-    const ctx = buildContext(config.COMMON_GROUP_ID, 'kicked', 'member');
-
-    await handleChatMemberUpdate(ctx);
-
-    expect(mockSetCommonAccessInGroup).toHaveBeenCalledWith(555n, true);
-    expect(mockSetUserInGroup).not.toHaveBeenCalled();
-    expect(mockNotifyAdmins).toHaveBeenCalledTimes(1);
-    expect(mockNotifyAdmins.mock.calls[0]?.[1]).toContain('общую группу');
   });
 
   it('transition to member without prior left/kicked (e.g. restricted -> member) updates inGroup but does not notify', async () => {
     const ctx = buildContext(config.GROUP_ID, 'restricted', 'member');
 
-    await handleChatMemberUpdate(ctx);
+    await handleGroupChatMemberUpdate(ctx);
 
     expect(mockSetUserInGroup).toHaveBeenCalledWith(555n, true);
     expect(mockNotifyAdmins).not.toHaveBeenCalled();
   });
 
-  it('left in GROUP_ID sets User.inGroup=false without notifying', async () => {
+  it('left sets User.inGroup=false without notifying', async () => {
     const ctx = buildContext(config.GROUP_ID, 'member', 'left');
 
-    await handleChatMemberUpdate(ctx);
+    await handleGroupChatMemberUpdate(ctx);
 
     expect(mockSetUserInGroup).toHaveBeenCalledWith(555n, false);
-    expect(mockNotifyAdmins).not.toHaveBeenCalled();
-  });
-
-  it('kicked in COMMON_GROUP_ID sets CommonAccess.inGroup=false without notifying', async () => {
-    const ctx = buildContext(config.COMMON_GROUP_ID, 'member', 'kicked');
-
-    await handleChatMemberUpdate(ctx);
-
-    expect(mockSetCommonAccessInGroup).toHaveBeenCalledWith(555n, false);
     expect(mockNotifyAdmins).not.toHaveBeenCalled();
   });
 
   it('restricted status is ignored entirely (inGroup untouched)', async () => {
     const ctx = buildContext(config.GROUP_ID, 'member', 'restricted');
 
-    await handleChatMemberUpdate(ctx);
+    await handleGroupChatMemberUpdate(ctx);
 
     expect(mockSetUserInGroup).not.toHaveBeenCalled();
+    expect(mockNotifyAdmins).not.toHaveBeenCalled();
+  });
+
+  it('ignores updates for COMMON_GROUP_ID (that chat belongs to the other bot)', async () => {
+    const ctx = buildContext(config.COMMON_GROUP_ID, 'left', 'member');
+
+    await expect(handleGroupChatMemberUpdate(ctx)).resolves.toBeUndefined();
+
+    expect(mockSetUserInGroup).not.toHaveBeenCalled();
+    expect(mockNotifyAdmins).not.toHaveBeenCalled();
+  });
+
+  it('ignores an unknown chat.id without throwing', async () => {
+    const ctx = buildContext(999999n, 'left', 'member');
+
+    await expect(handleGroupChatMemberUpdate(ctx)).resolves.toBeUndefined();
+
+    expect(mockSetUserInGroup).not.toHaveBeenCalled();
+    expect(mockNotifyAdmins).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleCommonChatMemberUpdate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSetCommonAccessInGroup.mockResolvedValue(undefined);
+    mockNotifyAdmins.mockResolvedValue(undefined);
+  });
+
+  it('join (kicked -> member) sets CommonAccess.inGroup=true and notifies admins via commonBot', async () => {
+    const ctx = buildContext(config.COMMON_GROUP_ID, 'kicked', 'member');
+
+    await handleCommonChatMemberUpdate(ctx);
+
+    expect(mockSetCommonAccessInGroup).toHaveBeenCalledWith(555n, true);
+    expect(mockSetUserInGroup).not.toHaveBeenCalled();
+    expect(mockNotifyAdmins).toHaveBeenCalledTimes(1);
+    expect(mockNotifyAdmins.mock.calls[0]?.[0]).toBe(commonBot);
+    expect(mockNotifyAdmins.mock.calls[0]?.[1]).toContain('общую группу');
+  });
+
+  it('kicked sets CommonAccess.inGroup=false without notifying', async () => {
+    const ctx = buildContext(config.COMMON_GROUP_ID, 'member', 'kicked');
+
+    await handleCommonChatMemberUpdate(ctx);
+
+    expect(mockSetCommonAccessInGroup).toHaveBeenCalledWith(555n, false);
+    expect(mockNotifyAdmins).not.toHaveBeenCalled();
+  });
+
+  it('restricted status is ignored entirely (inGroup untouched)', async () => {
+    const ctx = buildContext(config.COMMON_GROUP_ID, 'member', 'restricted');
+
+    await handleCommonChatMemberUpdate(ctx);
+
     expect(mockSetCommonAccessInGroup).not.toHaveBeenCalled();
     expect(mockNotifyAdmins).not.toHaveBeenCalled();
   });
 
-  it('unknown chat.id is ignored without throwing', async () => {
-    const ctx = buildContext(999999n, 'left', 'member');
+  it('ignores updates for GROUP_ID (that chat belongs to the other bot)', async () => {
+    const ctx = buildContext(config.GROUP_ID, 'kicked', 'member');
 
-    await expect(handleChatMemberUpdate(ctx)).resolves.toBeUndefined();
+    await expect(handleCommonChatMemberUpdate(ctx)).resolves.toBeUndefined();
 
-    expect(mockSetUserInGroup).not.toHaveBeenCalled();
+    expect(mockSetCommonAccessInGroup).not.toHaveBeenCalled();
+    expect(mockNotifyAdmins).not.toHaveBeenCalled();
+  });
+
+  it('ignores an unknown chat.id without throwing', async () => {
+    const ctx = buildContext(999999n, 'kicked', 'member');
+
+    await expect(handleCommonChatMemberUpdate(ctx)).resolves.toBeUndefined();
+
     expect(mockSetCommonAccessInGroup).not.toHaveBeenCalled();
     expect(mockNotifyAdmins).not.toHaveBeenCalled();
   });

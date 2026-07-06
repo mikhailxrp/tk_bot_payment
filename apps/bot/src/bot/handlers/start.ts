@@ -9,23 +9,26 @@ import {
 } from '../../services/subscription.js';
 import {
   type CommonAccessUiState,
+  commonAccessKeyboard,
   mainReplyKeyboard,
   paymentKeyboard,
-  productChoiceKeyboard,
+  subscriptionKeyboard,
 } from '../keyboards.js';
 import { isBotAdmin } from '../middleware/isAdmin.js';
 import { handleAdmin } from './admin.js';
 
-const WELCOME_MESSAGE =
-  'Добро пожаловать! Выберите группу для оформления доступа.';
+const SUBSCRIPTION_WELCOME_MESSAGE = 'Добро пожаловать! Оформите подписку на закрытую группу.';
+
+const COMMON_WELCOME_MESSAGE =
+  'Добро пожаловать! Оформите доступ в группу KORDON Transfer.';
 
 const COMMON_ACCESS_PAID_MESSAGE = 'Доступ в общую группу уже оплачен.';
 
 const PAYMENT_SUCCESS_MESSAGE =
-  'Оплата прошла успешно! Подписка будет активирована автоматически — обычно это занимает несколько секунд.';
+  'Оплата прошла успешно! Доступ будет активирован автоматически — обычно это занимает несколько секунд.';
 
 const PAYMENT_FAIL_MESSAGE =
-  'Оплата не была завершена. Нажмите /start и попробуйте оформить подписку снова.';
+  'Оплата не была завершена. Нажмите /start и попробуйте оформить оплату снова.';
 
 const PRICE_UNAVAILABLE_MESSAGE =
   'Стоимость подписки временно недоступна. Попробуйте позже.';
@@ -55,7 +58,34 @@ function formatCommonAccessMessage(amount: string): string {
   return `Стоимость доступа: ${amount} ₽\n\nНажмите «Оплатить» для продолжения.`;
 }
 
-export async function handleStart(ctx: Context): Promise<void> {
+/**
+ * The User row is shared across both bots, so "first contact" can't be tracked per-bot without
+ * a schema change — the intro is sent unconditionally on every /start instead (idempotent from
+ * the user's point of view: Telegram just keeps the same reply keyboard pinned).
+ */
+async function upsertUserAndSendMenuKeyboard(ctx: Context, userId: bigint): Promise<void> {
+  const from = ctx.from;
+  if (!from) {
+    return;
+  }
+
+  await prisma.user.upsert({
+    where: { id: userId },
+    update: {
+      username: from.username ?? null,
+      firstName: from.first_name ?? null,
+    },
+    create: {
+      id: userId,
+      username: from.username ?? null,
+      firstName: from.first_name ?? null,
+    },
+  });
+
+  await ctx.reply(MENU_KEYBOARD_INTRO_MESSAGE, { reply_markup: mainReplyKeyboard() });
+}
+
+export async function handleSubscriptionStart(ctx: Context): Promise<void> {
   const from = ctx.from;
   if (!from) {
     return;
@@ -72,30 +102,36 @@ export async function handleStart(ctx: Context): Promise<void> {
   }
 
   const userId = BigInt(from.id);
-
-  const existingUser = await prisma.user.findUnique({ where: { id: userId } });
-
-  await prisma.user.upsert({
-    where: { id: userId },
-    update: {
-      username: from.username ?? null,
-      firstName: from.first_name ?? null,
-    },
-    create: {
-      id: userId,
-      username: from.username ?? null,
-      firstName: from.first_name ?? null,
-    },
-  });
-
-  if (!existingUser) {
-    await ctx.reply(MENU_KEYBOARD_INTRO_MESSAGE, { reply_markup: mainReplyKeyboard() });
-  }
+  await upsertUserAndSendMenuKeyboard(ctx, userId);
 
   if (await isBotAdmin(userId)) {
     await handleAdmin(ctx);
     return;
   }
+
+  await ctx.reply(SUBSCRIPTION_WELCOME_MESSAGE, {
+    reply_markup: subscriptionKeyboard(),
+  });
+}
+
+export async function handleCommonStart(ctx: Context): Promise<void> {
+  const from = ctx.from;
+  if (!from) {
+    return;
+  }
+
+  const payload = ctx.match;
+  if (payload === 'paid') {
+    await ctx.reply(PAYMENT_SUCCESS_MESSAGE);
+    return;
+  }
+  if (payload === 'fail') {
+    await ctx.reply(PAYMENT_FAIL_MESSAGE);
+    return;
+  }
+
+  const userId = BigInt(from.id);
+  await upsertUserAndSendMenuKeyboard(ctx, userId);
 
   const commonAccess = await prisma.commonAccess.findUnique({
     where: { userId },
@@ -110,12 +146,12 @@ export async function handleStart(ctx: Context): Promise<void> {
 
   const message =
     commonAccessState === 'none'
-      ? WELCOME_MESSAGE
-      : `${WELCOME_MESSAGE}\n\n${COMMON_ACCESS_PAID_MESSAGE}`;
+      ? COMMON_WELCOME_MESSAGE
+      : `${COMMON_WELCOME_MESSAGE}\n\n${COMMON_ACCESS_PAID_MESSAGE}`;
 
-  await ctx.reply(message, {
-    reply_markup: productChoiceKeyboard(commonAccessState),
-  });
+  const keyboard = commonAccessKeyboard(commonAccessState);
+
+  await ctx.reply(message, keyboard ? { reply_markup: keyboard } : undefined);
 }
 
 export async function handleSubscribeCallback(ctx: Context): Promise<void> {

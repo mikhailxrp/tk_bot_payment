@@ -41,7 +41,15 @@ const {
 }));
 
 vi.mock('../src/bot/bot.js', () => ({
-  bot: {
+  subscriptionBot: {
+    api: {
+      createChatInviteLink: mockCreateChatInviteLink,
+      sendMessage: mockSendMessage,
+      getChat: mockGetChat,
+      restrictChatMember: mockRestrictChatMember,
+    },
+  },
+  commonBot: {
     api: {
       createChatInviteLink: mockCreateChatInviteLink,
       sendMessage: mockSendMessage,
@@ -69,6 +77,7 @@ vi.mock('@tg-bot/db', () => ({
   },
 }));
 
+import { commonBot, subscriptionBot } from '../src/bot/bot.js';
 import { config } from '../src/config.js';
 import {
   applyPayment,
@@ -166,6 +175,7 @@ describe('grantAccessAfterPayment', () => {
       expect.stringContaining('закрытую группу'),
     );
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
+    expect(mockNotifyAdmins.mock.calls[0]?.[0]).toBe(subscriptionBot);
     expect(mockNotifyAdmins.mock.calls[0]?.[1]).toContain('срок до');
   });
 
@@ -187,6 +197,7 @@ describe('grantAccessAfterPayment', () => {
       expect.stringContaining('общую группу'),
     );
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
+    expect(mockNotifyAdmins.mock.calls[0]?.[0]).toBe(commonBot);
     expect(mockNotifyAdmins.mock.calls[0]?.[1]).toContain('бессрочный доступ');
   });
 });

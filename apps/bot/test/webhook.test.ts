@@ -98,7 +98,15 @@ vi.mock('@tg-bot/db', () => ({
 }));
 
 vi.mock('../src/bot/bot.js', () => ({
-  bot: {
+  subscriptionBot: {
+    api: {
+      createChatInviteLink: mockCreateChatInviteLink,
+      sendMessage: mockSendMessage,
+      getChat: mockGetChat,
+      restrictChatMember: mockRestrictChatMember,
+    },
+  },
+  commonBot: {
     api: {
       createChatInviteLink: mockCreateChatInviteLink,
       sendMessage: mockSendMessage,
@@ -120,6 +128,7 @@ vi.mock('../src/logger.js', () => ({
   },
 }));
 
+import { commonBot, subscriptionBot } from '../src/bot/bot.js';
 import { config } from '../src/config.js';
 import { registerRobokassaWebhook } from '../src/payments/webhook.js';
 
@@ -231,6 +240,7 @@ describe('POST /robokassa/result', () => {
     expect(mockCreateChatInviteLink).toHaveBeenCalledOnce();
     expect(mockSendMessage).toHaveBeenCalledOnce();
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
+    expect(mockNotifyAdmins.mock.calls[0]?.[0]).toBe(subscriptionBot);
 
     await app.close();
   });
@@ -306,6 +316,7 @@ describe('POST /robokassa/result', () => {
     expect(mockCreateChatInviteLink).toHaveBeenCalledOnce();
     expect(mockSendMessage).toHaveBeenCalledOnce();
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
+    expect(mockNotifyAdmins.mock.calls[0]?.[0]).toBe(commonBot);
 
     await app.close();
   });

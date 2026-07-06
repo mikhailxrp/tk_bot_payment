@@ -134,7 +134,7 @@ vi.mock('@tg-bot/db', () => ({
 }));
 
 vi.mock('../src/bot/bot.js', () => ({
-  bot: {
+  subscriptionBot: {
     api: {
       restrictChatMember: mockRestrictChatMember,
       sendMessage: mockSendMessage,

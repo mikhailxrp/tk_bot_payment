@@ -38,6 +38,7 @@ function booleanFromEnv(fieldName: string) {
 
 const envSchema = z.object({
   BOT_TOKEN: z.string().trim().min(1, 'BOT_TOKEN is required'),
+  COMMON_BOT_TOKEN: z.string().trim().min(1, 'COMMON_BOT_TOKEN is required'),
   GROUP_ID: bigIntFromNonEmptyString('GROUP_ID'),
   COMMON_GROUP_ID: bigIntFromNonEmptyString('COMMON_GROUP_ID'),
   ADMIN_ID: bigIntFromNonEmptyString('ADMIN_ID').refine((value) => value > 0n, {

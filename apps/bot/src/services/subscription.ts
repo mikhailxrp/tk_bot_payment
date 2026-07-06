@@ -2,7 +2,7 @@ import type { Payment } from '@tg-bot/db';
 import { prisma, ProductType, PaymentStatus, UserStatus } from '@tg-bot/db';
 import type { Prisma } from '@prisma/client';
 
-import { bot } from '../bot/bot.js';
+import { commonBot, subscriptionBot } from '../bot/bot.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { buildPaymentUrl, formatOutSum } from '../payments/robokassa.js';
@@ -83,12 +83,12 @@ export async function applyPayment(
 
 export async function unmuteUserAfterPayment(userId: bigint): Promise<boolean> {
   try {
-    const chat = await bot.api.getChat(config.GROUP_ID.toString());
+    const chat = await subscriptionBot.api.getChat(config.GROUP_ID.toString());
     if (!chat.permissions) {
       throw new Error('Group chat permissions are unavailable');
     }
 
-    await bot.api.restrictChatMember(
+    await subscriptionBot.api.restrictChatMember(
       config.GROUP_ID.toString(),
       Number(userId),
       chat.permissions,
@@ -167,7 +167,7 @@ export async function muteExpiredUser(
 
 export async function restrictExpiredUser(userId: bigint): Promise<boolean> {
   try {
-    await bot.api.restrictChatMember(config.GROUP_ID.toString(), Number(userId), {
+    await subscriptionBot.api.restrictChatMember(config.GROUP_ID.toString(), Number(userId), {
       can_send_messages: false,
     });
     return true;
@@ -221,29 +221,34 @@ function buildAdminPaymentNotification(params: GrantAccessAfterPaymentParams): s
   return `Оплата от ${user}, ${sum} ₽, срок до ${formatExpiresAt(params.expiresAt)}`;
 }
 
+function resolveBotForProduct(product: ProductType) {
+  return product === ProductType.LIFETIME ? commonBot : subscriptionBot;
+}
+
 export async function grantAccessAfterPayment(
   params: GrantAccessAfterPaymentParams,
 ): Promise<void> {
   const groupId = resolveGroupId(params.product);
+  const targetBot = resolveBotForProduct(params.product);
 
-  const invite = await bot.api.createChatInviteLink(groupId.toString(), {
+  const invite = await targetBot.api.createChatInviteLink(groupId.toString(), {
     member_limit: 1,
   });
 
   const userMessage = buildUserInviteMessage(params.product, invite.invite_link);
-  await bot.api.sendMessage(params.userId.toString(), userMessage);
+  await targetBot.api.sendMessage(params.userId.toString(), userMessage);
 
   const adminMessage = buildAdminPaymentNotification(params);
-  await notifyAdmins(bot, adminMessage);
+  await notifyAdmins(targetBot, adminMessage);
 }
 
 export async function resendCommonAccessInviteLink(userId: bigint): Promise<void> {
-  const invite = await bot.api.createChatInviteLink(config.COMMON_GROUP_ID.toString(), {
+  const invite = await commonBot.api.createChatInviteLink(config.COMMON_GROUP_ID.toString(), {
     member_limit: 1,
   });
 
   const userMessage = RESEND_INVITE_LINK_USER_MESSAGE.replace('{link}', invite.invite_link);
-  await bot.api.sendMessage(userId.toString(), userMessage);
+  await commonBot.api.sendMessage(userId.toString(), userMessage);
 }
 
 export async function setUserInGroup(userId: bigint, inGroup: boolean): Promise<void> {
