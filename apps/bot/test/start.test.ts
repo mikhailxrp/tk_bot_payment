@@ -24,12 +24,15 @@ type ReplyMarkup = {
   reply_markup?: { inline_keyboard: InlineButton[][] };
 };
 
+type SubscriptionPaymentLink = { paymentUrl: string; amount: string; periodDays: string };
+
 const {
   mockUserUpsert,
   mockCommonAccessFindUnique,
   mockSettingFindUnique,
   mockPaymentCreate,
   mockResendCommonAccessInviteLink,
+  mockCreateSubscriptionPaymentLink,
 } = vi.hoisted(() => ({
   mockUserUpsert: vi.fn<(args: UserUpsertArgs) => Promise<unknown>>(),
   mockCommonAccessFindUnique:
@@ -39,6 +42,8 @@ const {
   mockSettingFindUnique: vi.fn<(args: SettingFindArgs) => Promise<{ value: string } | null>>(),
   mockPaymentCreate: vi.fn<(args: PaymentCreateArgs) => Promise<{ id: number }>>(),
   mockResendCommonAccessInviteLink: vi.fn<(userId: bigint) => Promise<void>>(),
+  mockCreateSubscriptionPaymentLink:
+    vi.fn<(userId: bigint) => Promise<SubscriptionPaymentLink | null>>(),
 }));
 
 vi.mock('@tg-bot/db', () => ({
@@ -68,6 +73,7 @@ vi.mock('@tg-bot/db', () => ({
 
 vi.mock('../src/services/subscription.js', () => ({
   resendCommonAccessInviteLink: mockResendCommonAccessInviteLink,
+  createSubscriptionPaymentLink: mockCreateSubscriptionPaymentLink,
 }));
 
 import {
@@ -228,31 +234,22 @@ describe('handleStart', () => {
 describe('handleSubscribeCallback', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSettingFindUnique.mockImplementation(({ where }) => {
-      if (where.key === 'price') {
-        return Promise.resolve({ value: '990' });
-      }
-      if (where.key === 'period_days') {
-        return Promise.resolve({ value: '30' });
-      }
-      return Promise.resolve(null);
+    mockCreateSubscriptionPaymentLink.mockResolvedValue({
+      paymentUrl:
+        'https://auth.robokassa.ru/Merchant/Index.aspx?Description=' +
+        encodeURIComponent('Подписка на 30 дней'),
+      amount: '990.00',
+      periodDays: '30',
     });
-    mockPaymentCreate.mockResolvedValue({ id: 42 });
   });
 
-  it('creates SUBSCRIPTION payment and shows Robokassa link', async () => {
+  it('creates SUBSCRIPTION payment link via the shared helper and shows it', async () => {
     const { ctx, editMessageText, answerCallbackQuery } = createMockContext();
 
     await handleSubscribeCallback(ctx);
 
     expect(answerCallbackQuery).toHaveBeenCalledOnce();
-    expect(mockPaymentCreate).toHaveBeenCalledWith({
-      data: {
-        userId: TEST_USER_ID_BIGINT,
-        amount: '990.00',
-        status: 'PENDING',
-      },
-    });
+    expect(mockCreateSubscriptionPaymentLink).toHaveBeenCalledWith(TEST_USER_ID_BIGINT);
     expect(editMessageText).toHaveBeenCalledOnce();
 
     const [text] = editMessageText.mock.calls[0] ?? [];
@@ -263,8 +260,8 @@ describe('handleSubscribeCallback', () => {
     expect(url).toContain('Description=' + encodeURIComponent('Подписка на 30 дней'));
   });
 
-  it('replies with unavailable message when price settings are invalid', async () => {
-    mockSettingFindUnique.mockResolvedValue(null);
+  it('replies with unavailable message when the helper returns null (invalid price settings)', async () => {
+    mockCreateSubscriptionPaymentLink.mockResolvedValue(null);
     const { ctx, reply } = createMockContext();
 
     await handleSubscribeCallback(ctx);
@@ -272,7 +269,6 @@ describe('handleSubscribeCallback', () => {
     expect(reply).toHaveBeenCalledWith(
       'Стоимость подписки временно недоступна. Попробуйте позже.',
     );
-    expect(mockPaymentCreate).not.toHaveBeenCalled();
   });
 });
 
