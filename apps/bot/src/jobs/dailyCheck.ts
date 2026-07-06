@@ -4,12 +4,22 @@ import type { Prisma } from '@prisma/client';
 import { subscriptionBot } from '../bot/bot.js';
 import { paymentKeyboard } from '../bot/keyboards.js';
 import { logger } from '../logger.js';
-import { notifyAdmins } from '../services/notify.js';
 import {
+  notifyAdmins,
+  sendThrottledPersonalMessages,
+  type PersonalMessage,
+} from '../services/notify.js';
+import {
+  buildActiveReminderMessage,
+  buildMutedReminderMessage,
   createSubscriptionPaymentLink,
   formatUserMention,
   muteExpiredUser,
+  readPositiveIntSetting,
   restrictExpiredUser,
+  selectAndMarkActiveReminders,
+  selectAndMarkMutedReminders,
+  type ReminderCandidate,
 } from '../services/subscription.js';
 
 const DAILY_CHECK_LOCK_NAME = 'daily_check';
@@ -17,14 +27,14 @@ const DAILY_CHECK_LOCK_NAME = 'daily_check';
 const EXPIRED_SUBSCRIPTION_MESSAGE =
   'Ваша подписка на закрытую группу истекла, и доступ приостановлен. Оплатите продление, чтобы снова писать в группе.';
 
-type DailyCheckCandidate = {
-  id: bigint;
-  username: string | null;
-};
-
 type DailyCheckOutcome =
   | { acquired: false }
-  | { acquired: true; mutedUsers: DailyCheckCandidate[] };
+  | {
+      acquired: true;
+      mutedUsers: ReminderCandidate[];
+      activeReminders: ReminderCandidate[];
+      mutedReminders: ReminderCandidate[];
+    };
 
 async function acquireLock(tx: Prisma.TransactionClient): Promise<boolean> {
   const rows = await tx.$queryRaw<{ locked: number | bigint | null }[]>`
@@ -38,35 +48,45 @@ async function releaseLock(tx: Prisma.TransactionClient): Promise<void> {
   await tx.$queryRaw`SELECT RELEASE_LOCK(${DAILY_CHECK_LOCK_NAME})`;
 }
 
-async function sendExpiredSubscriptionMessage(userId: bigint): Promise<void> {
-  const link = await createSubscriptionPaymentLink(userId);
-  if (!link) {
-    logger.warn(
-      { userId: userId.toString() },
-      'daily check: subscription price/period settings unavailable, payment message not sent',
-    );
-    return;
-  }
+function buildSummary(
+  mutedUsers: ReminderCandidate[],
+  activeReminderSentCount: number,
+  mutedReminderSentCount: number,
+): string {
+  const mutedPart =
+    mutedUsers.length === 0
+      ? 'замьючено 0 пользователей'
+      : `замьючено ${mutedUsers.length} пользователей: ${mutedUsers
+          .map((user) => formatUserMention(user.username, user.id))
+          .join(', ')}`;
 
-  await subscriptionBot.api.sendMessage(userId.toString(), EXPIRED_SUBSCRIPTION_MESSAGE, {
-    reply_markup: paymentKeyboard(link.paymentUrl),
-  });
-}
-
-function buildSummary(mutedUsers: DailyCheckCandidate[]): string {
-  if (mutedUsers.length === 0) {
-    return 'Ежедневная проверка подписок: замьючено 0 пользователей.';
-  }
-
-  const mentions = mutedUsers
-    .map((user) => formatUserMention(user.username, user.id))
-    .join(', ');
-
-  return `Ежедневная проверка подписок: замьючено ${mutedUsers.length} пользователей: ${mentions}.`;
+  return (
+    `Ежедневная проверка подписок: ${mutedPart}. ` +
+    `Напоминаний отправлено: активным ${activeReminderSentCount}, ` +
+    `замьюченным ${mutedReminderSentCount}.`
+  );
 }
 
 export async function runDailyCheck(): Promise<{ ranNow: boolean }> {
   const now = new Date();
+
+  const [remindDays, mutedRemindDays] = await Promise.all([
+    readPositiveIntSetting('remind_days'),
+    readPositiveIntSetting('muted_remind_days'),
+  ]);
+
+  if (remindDays === null) {
+    logger.warn(
+      { key: 'remind_days' },
+      'daily check: remind_days setting invalid/missing, skipping active reminders this run',
+    );
+  }
+  if (mutedRemindDays === null) {
+    logger.warn(
+      { key: 'muted_remind_days' },
+      'daily check: muted_remind_days setting invalid/missing, skipping muted reminders this run',
+    );
+  }
 
   const outcome = await prisma.$transaction(async (tx): Promise<DailyCheckOutcome> => {
     const acquired = await acquireLock(tx);
@@ -80,7 +100,7 @@ export async function runDailyCheck(): Promise<{ ranNow: boolean }> {
         select: { id: true, username: true },
       });
 
-      const mutedUsers: DailyCheckCandidate[] = [];
+      const mutedUsers: ReminderCandidate[] = [];
 
       for (const candidate of candidates) {
         const wasMuted = await muteExpiredUser(tx, candidate.id, now);
@@ -89,7 +109,14 @@ export async function runDailyCheck(): Promise<{ ranNow: boolean }> {
         }
       }
 
-      return { acquired: true, mutedUsers };
+      const activeReminders =
+        remindDays !== null ? await selectAndMarkActiveReminders(tx, now, remindDays) : [];
+      const mutedReminders =
+        mutedRemindDays !== null
+          ? await selectAndMarkMutedReminders(tx, now, mutedRemindDays)
+          : [];
+
+      return { acquired: true, mutedUsers, activeReminders, mutedReminders };
     } finally {
       await releaseLock(tx);
     }
@@ -103,22 +130,97 @@ export async function runDailyCheck(): Promise<{ ranNow: boolean }> {
     return { ranNow: false };
   }
 
+  logger.info(
+    {
+      activeReminders: outcome.activeReminders.length,
+      mutedReminders: outcome.mutedReminders.length,
+    },
+    'daily check: reminder candidates selected',
+  );
+
   // Telegram calls run after the transaction has committed — the DB guard above is already
   // the source of truth for who got muted, and network I/O here must not risk expiring the
   // transaction's lock/timeout (see muteExpiredUser's doc comment).
+  const muteMessages: PersonalMessage[] = [];
+
   for (const candidate of outcome.mutedUsers) {
     await restrictExpiredUser(candidate.id);
 
-    try {
-      await sendExpiredSubscriptionMessage(candidate.id);
-    } catch (err) {
-      logger.error(
-        { err, userId: candidate.id.toString() },
-        'daily check: failed to send expired subscription message',
+    const link = await createSubscriptionPaymentLink(candidate.id);
+    if (!link) {
+      logger.warn(
+        { userId: candidate.id.toString() },
+        'daily check: subscription price/period settings unavailable, payment message not sent',
       );
+      continue;
+    }
+
+    muteMessages.push({
+      chatId: candidate.id,
+      text: EXPIRED_SUBSCRIPTION_MESSAGE,
+      reply_markup: paymentKeyboard(link.paymentUrl),
+    });
+  }
+
+  await sendThrottledPersonalMessages(subscriptionBot, muteMessages);
+
+  const activeReminderMessages: PersonalMessage[] = [];
+  if (outcome.activeReminders.length > 0 && remindDays !== null) {
+    const activeReminderText = buildActiveReminderMessage(remindDays);
+
+    for (const candidate of outcome.activeReminders) {
+      const link = await createSubscriptionPaymentLink(candidate.id);
+      if (!link) {
+        logger.warn(
+          { userId: candidate.id.toString() },
+          'daily check: subscription price/period settings unavailable, active reminder not sent',
+        );
+        continue;
+      }
+
+      activeReminderMessages.push({
+        chatId: candidate.id,
+        text: activeReminderText,
+        reply_markup: paymentKeyboard(link.paymentUrl),
+      });
     }
   }
 
-  await notifyAdmins(subscriptionBot, buildSummary(outcome.mutedUsers));
+  const activeReminderSentCount = await sendThrottledPersonalMessages(
+    subscriptionBot,
+    activeReminderMessages,
+  );
+
+  const mutedReminderMessages: PersonalMessage[] = [];
+  if (outcome.mutedReminders.length > 0) {
+    const mutedReminderText = buildMutedReminderMessage();
+
+    for (const candidate of outcome.mutedReminders) {
+      const link = await createSubscriptionPaymentLink(candidate.id);
+      if (!link) {
+        logger.warn(
+          { userId: candidate.id.toString() },
+          'daily check: subscription price/period settings unavailable, muted reminder not sent',
+        );
+        continue;
+      }
+
+      mutedReminderMessages.push({
+        chatId: candidate.id,
+        text: mutedReminderText,
+        reply_markup: paymentKeyboard(link.paymentUrl),
+      });
+    }
+  }
+
+  const mutedReminderSentCount = await sendThrottledPersonalMessages(
+    subscriptionBot,
+    mutedReminderMessages,
+  );
+
+  await notifyAdmins(
+    subscriptionBot,
+    buildSummary(outcome.mutedUsers, activeReminderSentCount, mutedReminderSentCount),
+  );
   return { ranNow: true };
 }

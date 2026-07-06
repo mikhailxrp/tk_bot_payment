@@ -1,12 +1,14 @@
 import type { Bot } from 'grammy';
-import { GrammyError, HttpError } from 'grammy';
+import { GrammyError, HttpError, InlineKeyboard } from 'grammy';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockAdminFindMany, mockSendMessage, mockLoggerWarn } = vi.hoisted(() => ({
   mockAdminFindMany:
     vi.fn<() => Promise<Array<{ telegramId: bigint }>>>(),
   mockSendMessage:
-    vi.fn<(chatId: string, text: string) => Promise<unknown>>(),
+    vi.fn<
+      (chatId: string, text: string, options?: { reply_markup?: unknown }) => Promise<unknown>
+    >(),
   mockLoggerWarn: vi.fn<(obj: unknown, msg?: string) => void>(),
 }));
 
@@ -26,6 +28,7 @@ vi.mock('../src/logger.js', () => ({
 
 import {
   notifyAdmins,
+  sendThrottledPersonalMessages,
   sendThrottledTextMessages,
   THROTTLE_INTERVAL_MS,
 } from '../src/services/notify.js';
@@ -163,6 +166,121 @@ describe('sendThrottledTextMessages', () => {
     await sendThrottledTextMessages(bot, [111n, 222n], 'alert');
 
     expect(mockSendMessage).toHaveBeenCalledTimes(2);
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      {
+        chatId: '111',
+        message: 'Network request for sendMessage failed',
+      },
+      'Failed to send throttled message',
+    );
+  });
+});
+
+describe('sendThrottledPersonalMessages', () => {
+  const replyMarkup = new InlineKeyboard().url('Pay', 'https://pay.example');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSendMessage.mockResolvedValue(undefined);
+  });
+
+  it('sends each item text and reply_markup with delay only between messages', async () => {
+    const bot = createMockBot();
+    const delays: number[] = [];
+
+    const sent = await sendThrottledPersonalMessages(
+      bot,
+      [
+        { chatId: 111n, text: 'first', reply_markup: replyMarkup },
+        { chatId: 222n, text: 'second' },
+      ],
+      {
+        delay: (ms) => {
+          delays.push(ms);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(sent).toBe(2);
+    expect(mockSendMessage).toHaveBeenCalledTimes(2);
+    expect(mockSendMessage).toHaveBeenNthCalledWith(1, '111', 'first', {
+      reply_markup: replyMarkup,
+    });
+    expect(mockSendMessage).toHaveBeenNthCalledWith(2, '222', 'second', undefined);
+    expect(delays).toEqual([THROTTLE_INTERVAL_MS]);
+  });
+
+  it('returns the number of successfully sent messages', async () => {
+    const bot = createMockBot();
+    const forbiddenError = createGrammyError(403, 'Forbidden: bot was blocked by the user');
+
+    mockSendMessage
+      .mockRejectedValueOnce(forbiddenError)
+      .mockResolvedValueOnce(undefined);
+
+    const sent = await sendThrottledPersonalMessages(bot, [
+      { chatId: 111n, text: 'fail' },
+      { chatId: 222n, text: 'ok' },
+    ]);
+
+    expect(sent).toBe(1);
+    expect(mockSendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('does nothing for an empty items list and returns 0', async () => {
+    const bot = createMockBot();
+    const delay = vi.fn<(ms: number) => Promise<void>>();
+
+    const sent = await sendThrottledPersonalMessages(bot, [], { delay });
+
+    expect(sent).toBe(0);
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(delay).not.toHaveBeenCalled();
+  });
+
+  it('logs GrammyError 403 and continues sending to other recipients', async () => {
+    const bot = createMockBot();
+    const forbiddenError = createGrammyError(
+      403,
+      'Forbidden: bot was blocked by the user',
+    );
+
+    mockSendMessage
+      .mockRejectedValueOnce(forbiddenError)
+      .mockResolvedValueOnce(undefined);
+
+    await sendThrottledPersonalMessages(bot, [
+      { chatId: 111n, text: 'alert' },
+      { chatId: 222n, text: 'alert' },
+    ]);
+
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      {
+        chatId: '111',
+        error_code: 403,
+        description: 'Forbidden: bot was blocked by the user',
+      },
+      'Failed to send throttled message',
+    );
+  });
+
+  it('logs HttpError and continues sending to other recipients', async () => {
+    const bot = createMockBot();
+    const networkError = new HttpError(
+      'Network request for sendMessage failed',
+      new Error('ECONNRESET'),
+    );
+
+    mockSendMessage
+      .mockRejectedValueOnce(networkError)
+      .mockResolvedValueOnce(undefined);
+
+    await sendThrottledPersonalMessages(bot, [
+      { chatId: 111n, text: 'alert' },
+      { chatId: 222n, text: 'alert' },
+    ]);
+
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       {
         chatId: '111',
