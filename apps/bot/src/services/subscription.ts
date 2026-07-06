@@ -1,13 +1,17 @@
 import type { Payment } from '@tg-bot/db';
-import { prisma, ProductType, UserStatus } from '@tg-bot/db';
+import { prisma, ProductType, PaymentStatus, UserStatus } from '@tg-bot/db';
 import type { Prisma } from '@prisma/client';
 
 import { bot } from '../bot/bot.js';
 import { config } from '../config.js';
-import { formatOutSum } from '../payments/robokassa.js';
+import { logger } from '../logger.js';
+import { buildPaymentUrl, formatOutSum } from '../payments/robokassa.js';
 import { notifyAdmins } from './notify.js';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+const PRICE_PATTERN = /^\d+(\.\d{1,2})?$/;
+const PERIOD_DAYS_PATTERN = /^\d+$/;
 
 const INVITE_LINK_USER_MESSAGE_SUBSCRIPTION =
   'Оплата прошла успешно! Перейдите по ссылке для вступления в закрытую группу:\n\n{link}';
@@ -68,6 +72,79 @@ export async function applyPayment(
   });
 
   return expiresAt;
+}
+
+export type SubscriptionPaymentLink = {
+  paymentUrl: string;
+  amount: string;
+  periodDays: string;
+};
+
+export async function createSubscriptionPaymentLink(
+  userId: bigint,
+): Promise<SubscriptionPaymentLink | null> {
+  const [priceSetting, periodDaysSetting] = await Promise.all([
+    prisma.setting.findUnique({ where: { key: 'price' } }),
+    prisma.setting.findUnique({ where: { key: 'period_days' } }),
+  ]);
+
+  const price = priceSetting?.value;
+  const periodDays = periodDaysSetting?.value;
+  if (
+    !price ||
+    !PRICE_PATTERN.test(price) ||
+    !periodDays ||
+    !PERIOD_DAYS_PATTERN.test(periodDays) ||
+    Number(periodDays) <= 0
+  ) {
+    return null;
+  }
+
+  const amount = formatOutSum(price);
+  const payment = await prisma.payment.create({
+    data: {
+      userId,
+      amount,
+      status: PaymentStatus.PENDING,
+    },
+  });
+
+  const description = `Подписка на ${periodDays} дней`;
+  const paymentUrl = buildPaymentUrl(amount, payment.id, description);
+
+  return { paymentUrl, amount, periodDays };
+}
+
+/**
+ * Atomic per-user guard against the ACTIVE+expired condition, followed by a best-effort
+ * restrictChatMember. Must run on `tx` — the same connection that holds the daily-check
+ * GET_LOCK — so the guard participates in that transaction. A failed restrictChatMember is
+ * logged but does not flip the return value: the DB guard already committed the MUTED status,
+ * which is the source of truth for whether this call actually muted the user.
+ */
+export async function muteExpiredUser(
+  tx: Prisma.TransactionClient,
+  userId: bigint,
+  now: Date,
+): Promise<boolean> {
+  const updated = await tx.user.updateMany({
+    where: { id: userId, status: UserStatus.ACTIVE, expiresAt: { lte: now } },
+    data: { status: UserStatus.MUTED, mutedAt: now },
+  });
+
+  if (updated.count !== 1) {
+    return false;
+  }
+
+  try {
+    await bot.api.restrictChatMember(config.GROUP_ID.toString(), Number(userId), {
+      can_send_messages: false,
+    });
+  } catch (err) {
+    logger.error({ err, userId: userId.toString() }, 'daily check: failed to restrictChatMember');
+  }
+
+  return true;
 }
 
 export function formatUserMention(username: string | null, userId: bigint): string {
