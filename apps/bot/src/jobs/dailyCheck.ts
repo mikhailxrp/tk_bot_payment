@@ -9,6 +9,7 @@ import {
   createSubscriptionPaymentLink,
   formatUserMention,
   muteExpiredUser,
+  restrictExpiredUser,
 } from '../services/subscription.js';
 
 const DAILY_CHECK_LOCK_NAME = 'daily_check';
@@ -83,19 +84,8 @@ export async function runDailyCheck(): Promise<{ ranNow: boolean }> {
 
       for (const candidate of candidates) {
         const wasMuted = await muteExpiredUser(tx, candidate.id, now);
-        if (!wasMuted) {
-          continue;
-        }
-
-        mutedUsers.push(candidate);
-
-        try {
-          await sendExpiredSubscriptionMessage(candidate.id);
-        } catch (err) {
-          logger.error(
-            { err, userId: candidate.id.toString() },
-            'daily check: failed to send expired subscription message',
-          );
+        if (wasMuted) {
+          mutedUsers.push(candidate);
         }
       }
 
@@ -111,6 +101,22 @@ export async function runDailyCheck(): Promise<{ ranNow: boolean }> {
       'daily check: lock not acquired, another run is already in progress — skipping',
     );
     return { ranNow: false };
+  }
+
+  // Telegram calls run after the transaction has committed — the DB guard above is already
+  // the source of truth for who got muted, and network I/O here must not risk expiring the
+  // transaction's lock/timeout (see muteExpiredUser's doc comment).
+  for (const candidate of outcome.mutedUsers) {
+    await restrictExpiredUser(candidate.id);
+
+    try {
+      await sendExpiredSubscriptionMessage(candidate.id);
+    } catch (err) {
+      logger.error(
+        { err, userId: candidate.id.toString() },
+        'daily check: failed to send expired subscription message',
+      );
+    }
   }
 
   await notifyAdmins(bot, buildSummary(outcome.mutedUsers));

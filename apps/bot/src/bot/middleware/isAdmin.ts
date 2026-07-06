@@ -17,22 +17,34 @@ export async function isAdmin(ctx: Context, next: NextFunction): Promise<void> {
 
   const telegramId = BigInt(from.id);
 
+  let admin;
   try {
-    const admin = await prisma.admin.findUnique({
+    admin = await prisma.admin.findUnique({
       where: { telegramId },
     });
-
-    if (!admin) {
-      await ctx.reply(ACCESS_DENIED_MESSAGE);
-      return;
-    }
-
-    await next();
   } catch (err) {
     logger.error(
       { err, telegramId: telegramId.toString() },
       'isAdmin db check failed',
     );
     await ctx.reply(ACCESS_CHECK_FAILED_MESSAGE);
+    return;
+  }
+
+  if (!admin) {
+    await ctx.reply(ACCESS_DENIED_MESSAGE);
+    return;
+  }
+
+  await next();
+}
+
+export async function isBotAdmin(telegramId: bigint): Promise<boolean> {
+  try {
+    const admin = await prisma.admin.findUnique({ where: { telegramId } });
+    return admin !== null;
+  } catch (err) {
+    logger.error({ err, telegramId: telegramId.toString() }, 'isBotAdmin db check failed');
+    return false;
   }
 }

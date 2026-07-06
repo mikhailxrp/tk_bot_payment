@@ -1,10 +1,15 @@
-import { InlineKeyboard } from 'grammy';
+import { InlineKeyboard, Keyboard } from 'grammy';
 
 export const SUBSCRIBE_CALLBACK = 'subscribe';
 export const COMMON_ACCESS_CALLBACK = 'common_access';
 export const RESEND_ACCESS_CALLBACK = 'resend_access';
 export const ADMIN_CHECK_CALLBACK = 'admin_check';
 export const ADMIN_SUMMARY_CALLBACK = 'admin_summary';
+export const MENU_BUTTON_TEXT = '☰ Меню';
+
+export function mainReplyKeyboard(): Keyboard {
+  return new Keyboard().text(MENU_BUTTON_TEXT).resized();
+}
 
 export type CommonAccessUiState = 'none' | 'paid_in_group' | 'paid_not_in_group';
 
@@ -15,7 +20,7 @@ export function productChoiceKeyboard(commonAccessState: CommonAccessUiState): I
   );
 
   if (commonAccessState === 'none') {
-    keyboard.row().text('Общая группа (разовый доступ)', COMMON_ACCESS_CALLBACK);
+    keyboard.row().text('Группа KORDON Transfer (разовый доступ)', COMMON_ACCESS_CALLBACK);
   } else if (commonAccessState === 'paid_not_in_group') {
     keyboard.row().text('Получить ссылку снова', RESEND_ACCESS_CALLBACK);
   }

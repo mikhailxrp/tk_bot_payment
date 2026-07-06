@@ -24,17 +24,25 @@ type ReplyMarkup = {
   reply_markup?: { inline_keyboard: InlineButton[][] };
 };
 
+type KeyboardReplyOptions = {
+  reply_markup?: { keyboard: { text: string }[][] };
+};
+
 type SubscriptionPaymentLink = { paymentUrl: string; amount: string; periodDays: string };
 
 const {
   mockUserUpsert,
+  mockUserFindUnique,
   mockCommonAccessFindUnique,
   mockSettingFindUnique,
   mockPaymentCreate,
   mockResendCommonAccessInviteLink,
   mockCreateSubscriptionPaymentLink,
+  mockAdminFindUnique,
 } = vi.hoisted(() => ({
   mockUserUpsert: vi.fn<(args: UserUpsertArgs) => Promise<unknown>>(),
+  mockUserFindUnique:
+    vi.fn<(args: { where: { id: bigint } }) => Promise<{ id: bigint } | null>>(),
   mockCommonAccessFindUnique:
     vi.fn<
       (args: { where: { userId: bigint } }) => Promise<{ userId: bigint; inGroup: boolean } | null>
@@ -44,6 +52,8 @@ const {
   mockResendCommonAccessInviteLink: vi.fn<(userId: bigint) => Promise<void>>(),
   mockCreateSubscriptionPaymentLink:
     vi.fn<(userId: bigint) => Promise<SubscriptionPaymentLink | null>>(),
+  mockAdminFindUnique:
+    vi.fn<(args: { where: { telegramId: bigint } }) => Promise<{ telegramId: bigint } | null>>(),
 }));
 
 vi.mock('@tg-bot/db', () => ({
@@ -58,6 +68,7 @@ vi.mock('@tg-bot/db', () => ({
   prisma: {
     user: {
       upsert: mockUserUpsert,
+      findUnique: mockUserFindUnique,
     },
     commonAccess: {
       findUnique: mockCommonAccessFindUnique,
@@ -68,12 +79,23 @@ vi.mock('@tg-bot/db', () => ({
     payment: {
       create: mockPaymentCreate,
     },
+    admin: {
+      findUnique: mockAdminFindUnique,
+    },
   },
 }));
 
 vi.mock('../src/services/subscription.js', () => ({
   resendCommonAccessInviteLink: mockResendCommonAccessInviteLink,
   createSubscriptionPaymentLink: mockCreateSubscriptionPaymentLink,
+}));
+
+vi.mock('../src/config.js', () => ({
+  config: { ADMIN_PANEL_URL: 'https://admin.example.com' },
+}));
+
+vi.mock('../src/jobs/dailyCheck.js', () => ({
+  runDailyCheck: vi.fn(),
 }));
 
 import {
@@ -137,7 +159,9 @@ describe('handleStart', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUserUpsert.mockResolvedValue({});
+    mockUserFindUnique.mockResolvedValue({ id: TEST_USER_ID_BIGINT });
     mockCommonAccessFindUnique.mockResolvedValue(null);
+    mockAdminFindUnique.mockResolvedValue(null);
   });
 
   it('shows both product buttons when CommonAccess is absent', async () => {
@@ -161,7 +185,7 @@ describe('handleStart', () => {
       callback_data: SUBSCRIBE_CALLBACK,
     });
     expect(buttons[1]).toMatchObject({
-      text: 'Общая группа (разовый доступ)',
+      text: 'Группа KORDON Transfer (разовый доступ)',
       callback_data: COMMON_ACCESS_CALLBACK,
     });
   });
@@ -228,6 +252,50 @@ describe('handleStart', () => {
     expect(reply).toHaveBeenCalledWith(expect.stringContaining('Оплата не была завершена'));
     expect(mockUserUpsert).not.toHaveBeenCalled();
     expect(mockCommonAccessFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('shows the admin menu instead of product buttons when the user is a bot admin', async () => {
+    mockAdminFindUnique.mockResolvedValue({ telegramId: TEST_USER_ID_BIGINT });
+    const { ctx, reply } = createMockContext();
+
+    await handleStart(ctx);
+
+    expect(mockAdminFindUnique).toHaveBeenCalledWith({
+      where: { telegramId: TEST_USER_ID_BIGINT },
+    });
+    expect(mockCommonAccessFindUnique).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith(
+      'Админ-панель бота: выберите действие.',
+      expect.any(Object),
+    );
+
+    const buttons = getInlineKeyboardButtons(reply);
+    expect(buttons).toEqual([
+      { text: '🔄 Проверить подписки', callback_data: 'admin_check' },
+      { text: '📊 Сводка', callback_data: 'admin_summary' },
+      { text: '🔗 Панель', url: 'https://admin.example.com' },
+    ]);
+  });
+
+  it('sends the persistent "Меню" keyboard on first contact only', async () => {
+    mockUserFindUnique.mockResolvedValue(null);
+    const { ctx, reply } = createMockContext();
+
+    await handleStart(ctx);
+
+    const [, options] = reply.mock.calls[0] as unknown as [string, KeyboardReplyOptions];
+    expect(options.reply_markup?.keyboard).toEqual([[{ text: '☰ Меню' }]]);
+  });
+
+  it('does not resend the persistent keyboard for a returning user', async () => {
+    mockUserFindUnique.mockResolvedValue({ id: TEST_USER_ID_BIGINT });
+    const { ctx, reply } = createMockContext();
+
+    await handleStart(ctx);
+
+    const calls = reply.mock.calls as unknown as [string, KeyboardReplyOptions][];
+    const hasPersistentKeyboard = calls.some(([, options]) => options?.reply_markup?.keyboard);
+    expect(hasPersistentKeyboard).toBe(false);
   });
 });
 

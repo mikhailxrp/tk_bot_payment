@@ -9,9 +9,12 @@ import {
 } from '../../services/subscription.js';
 import {
   type CommonAccessUiState,
+  mainReplyKeyboard,
   paymentKeyboard,
   productChoiceKeyboard,
 } from '../keyboards.js';
+import { isBotAdmin } from '../middleware/isAdmin.js';
+import { handleAdmin } from './admin.js';
 
 const WELCOME_MESSAGE =
   'Добро пожаловать! Выберите группу для оформления доступа.';
@@ -38,6 +41,9 @@ const RESEND_LINK_ERROR_MESSAGE =
   'Не удалось создать ссылку для вступления. Попробуйте позже или обратитесь к администратору.';
 
 const COMMON_ACCESS_DESCRIPTION = 'Разовый доступ в общую группу';
+
+const MENU_KEYBOARD_INTRO_MESSAGE =
+  'Кнопка «☰ Меню» всегда под полем ввода — нажмите её, чтобы вернуться в это меню.';
 
 const PRICE_PATTERN = /^\d+(\.\d{1,2})?$/;
 
@@ -67,6 +73,8 @@ export async function handleStart(ctx: Context): Promise<void> {
 
   const userId = BigInt(from.id);
 
+  const existingUser = await prisma.user.findUnique({ where: { id: userId } });
+
   await prisma.user.upsert({
     where: { id: userId },
     update: {
@@ -79,6 +87,15 @@ export async function handleStart(ctx: Context): Promise<void> {
       firstName: from.first_name ?? null,
     },
   });
+
+  if (!existingUser) {
+    await ctx.reply(MENU_KEYBOARD_INTRO_MESSAGE, { reply_markup: mainReplyKeyboard() });
+  }
+
+  if (await isBotAdmin(userId)) {
+    await handleAdmin(ctx);
+    return;
+  }
 
   const commonAccess = await prisma.commonAccess.findUnique({
     where: { userId },
