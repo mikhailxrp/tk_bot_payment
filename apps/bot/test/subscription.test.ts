@@ -86,7 +86,6 @@ import {
   grantAccessAfterPayment,
   muteExpiredUser,
   readPositiveIntSetting,
-  resendCommonAccessInviteLink,
   restrictExpiredUser,
   selectAndMarkActiveReminders,
   selectAndMarkMutedReminders,
@@ -202,35 +201,6 @@ describe('grantAccessAfterPayment', () => {
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
     expect(mockNotifyAdmins.mock.calls[0]?.[0]).toBe(commonBot);
     expect(mockNotifyAdmins.mock.calls[0]?.[1]).toContain('бессрочный доступ');
-  });
-});
-
-describe('resendCommonAccessInviteLink', () => {
-  const TEST_USER_ID = BigInt(987654321);
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockCreateChatInviteLink.mockResolvedValue({
-      invite_link: 'https://t.me/joinchat/test-invite',
-    });
-    mockSendMessage.mockResolvedValue({});
-  });
-
-  it('always creates the invite link in COMMON_GROUP_ID', async () => {
-    await resendCommonAccessInviteLink(TEST_USER_ID);
-
-    expect(mockCreateChatInviteLink).toHaveBeenCalledWith(
-      config.COMMON_GROUP_ID.toString(),
-      { member_limit: 1 },
-    );
-  });
-
-  it('sends a message that does not claim a fresh successful payment', async () => {
-    await resendCommonAccessInviteLink(TEST_USER_ID);
-
-    const [, text] = mockSendMessage.mock.calls[0] ?? [];
-    expect(text).not.toContain('Оплата прошла успешно');
-    expect(text).toContain('https://t.me/joinchat/test-invite');
   });
 });
 

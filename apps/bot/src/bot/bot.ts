@@ -10,7 +10,6 @@ import { handleCommonChatMemberUpdate, handleGroupChatMemberUpdate } from './han
 import {
   handleCommonAccessCallback,
   handleCommonStart,
-  handleResendAccessCallback,
   handleSubscribeCallback,
   handleSubscriptionStart,
 } from './handlers/start.js';
@@ -19,7 +18,6 @@ import {
   ADMIN_SUMMARY_CALLBACK,
   COMMON_ACCESS_CALLBACK,
   MENU_BUTTON_TEXT,
-  RESEND_ACCESS_CALLBACK,
   SUBSCRIBE_CALLBACK,
 } from './keyboards.js';
 import { isAdmin } from './middleware/isAdmin.js';
@@ -41,5 +39,4 @@ subscriptionBot.on('chat_member', handleGroupChatMemberUpdate);
 commonBot.command('start', handleCommonStart);
 commonBot.hears(MENU_BUTTON_TEXT, handleCommonStart);
 commonBot.callbackQuery(COMMON_ACCESS_CALLBACK, handleCommonAccessCallback);
-commonBot.callbackQuery(RESEND_ACCESS_CALLBACK, handleResendAccessCallback);
 commonBot.on('chat_member', handleCommonChatMemberUpdate);

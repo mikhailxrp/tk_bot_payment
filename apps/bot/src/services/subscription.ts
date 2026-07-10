@@ -19,9 +19,6 @@ const INVITE_LINK_USER_MESSAGE_SUBSCRIPTION =
 const INVITE_LINK_USER_MESSAGE_LIFETIME =
   'Оплата прошла успешно! Перейдите по ссылке для вступления в общую группу:\n\n{link}';
 
-const RESEND_INVITE_LINK_USER_MESSAGE =
-  'Ваша ссылка для вступления в общую группу:\n\n{link}';
-
 export type GrantAccessAfterPaymentParams = {
   userId: bigint;
   product: ProductType;
@@ -344,15 +341,6 @@ export async function grantAccessAfterPayment(
 
   const adminMessage = buildAdminPaymentNotification(params);
   await notifyAdmins(targetBot, adminMessage);
-}
-
-export async function resendCommonAccessInviteLink(userId: bigint): Promise<void> {
-  const invite = await commonBot.api.createChatInviteLink(config.COMMON_GROUP_ID.toString(), {
-    member_limit: 1,
-  });
-
-  const userMessage = RESEND_INVITE_LINK_USER_MESSAGE.replace('{link}', invite.invite_link);
-  await commonBot.api.sendMessage(userId.toString(), userMessage);
 }
 
 export async function setUserInGroup(userId: bigint, inGroup: boolean): Promise<void> {

@@ -2,7 +2,6 @@ import { InlineKeyboard, Keyboard } from 'grammy';
 
 export const SUBSCRIBE_CALLBACK = 'subscribe';
 export const COMMON_ACCESS_CALLBACK = 'common_access';
-export const RESEND_ACCESS_CALLBACK = 'resend_access';
 export const ADMIN_CHECK_CALLBACK = 'admin_check';
 export const ADMIN_SUMMARY_CALLBACK = 'admin_summary';
 export const MENU_BUTTON_TEXT = '☰ Меню';
@@ -28,7 +27,7 @@ export function commonAccessKeyboard(
   }
 
   if (commonAccessState === 'paid_not_in_group') {
-    return new InlineKeyboard().text('Получить ссылку снова', RESEND_ACCESS_CALLBACK);
+    return new InlineKeyboard().text('Оплатить снова', COMMON_ACCESS_CALLBACK);
   }
 
   return undefined;
