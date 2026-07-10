@@ -1,12 +1,8 @@
 import { PaymentStatus, ProductType, prisma } from '@tg-bot/db';
 import type { Context } from 'grammy';
 
-import { logger } from '../../logger.js';
 import { buildPaymentUrl, formatOutSum } from '../../payments/robokassa.js';
-import {
-  createSubscriptionPaymentLink,
-  resendCommonAccessInviteLink,
-} from '../../services/subscription.js';
+import { createSubscriptionPaymentLink } from '../../services/subscription.js';
 import {
   type CommonAccessUiState,
   commonAccessKeyboard,
@@ -24,6 +20,9 @@ const COMMON_WELCOME_MESSAGE =
 
 const COMMON_ACCESS_PAID_MESSAGE = 'Доступ в общую группу уже оплачен.';
 
+const COMMON_ACCESS_LEFT_MESSAGE =
+  'Вы вышли из группы, доступ аннулирован — оплатите повторно, чтобы получить новую ссылку для вступления.';
+
 const PAYMENT_SUCCESS_MESSAGE =
   'Оплата прошла успешно! Доступ будет активирован автоматически — обычно это занимает несколько секунд.';
 
@@ -37,11 +36,6 @@ const COMMON_PRICE_UNAVAILABLE_MESSAGE =
   'Стоимость доступа в общую группу временно недоступна. Попробуйте позже.';
 
 const COMMON_ACCESS_ALREADY_PAID_MESSAGE = 'Доступ в общую группу уже оплачен.';
-
-const COMMON_ACCESS_ALREADY_ACTIVE_MESSAGE = 'Доступ в общую группу уже активен.';
-
-const RESEND_LINK_ERROR_MESSAGE =
-  'Не удалось создать ссылку для вступления. Попробуйте позже или обратитесь к администратору.';
 
 const COMMON_ACCESS_DESCRIPTION = 'Разовый доступ в общую группу';
 
@@ -145,9 +139,11 @@ export async function handleCommonStart(ctx: Context): Promise<void> {
         : 'paid_not_in_group';
 
   const message =
-    commonAccessState === 'none'
-      ? COMMON_WELCOME_MESSAGE
-      : `${COMMON_WELCOME_MESSAGE}\n\n${COMMON_ACCESS_PAID_MESSAGE}`;
+    commonAccessState === 'paid_in_group'
+      ? `${COMMON_WELCOME_MESSAGE}\n\n${COMMON_ACCESS_PAID_MESSAGE}`
+      : commonAccessState === 'paid_not_in_group'
+        ? `${COMMON_WELCOME_MESSAGE}\n\n${COMMON_ACCESS_LEFT_MESSAGE}`
+        : COMMON_WELCOME_MESSAGE;
 
   const keyboard = commonAccessKeyboard(commonAccessState);
 
@@ -193,7 +189,7 @@ export async function handleCommonAccessCallback(ctx: Context): Promise<void> {
   const existingAccess = await prisma.commonAccess.findUnique({
     where: { userId },
   });
-  if (existingAccess) {
+  if (existingAccess?.inGroup) {
     await ctx.reply(COMMON_ACCESS_ALREADY_PAID_MESSAGE);
     return;
   }
@@ -229,31 +225,4 @@ export async function handleCommonAccessCallback(ctx: Context): Promise<void> {
   }
 
   await ctx.reply(text, { reply_markup: keyboard });
-}
-
-export async function handleResendAccessCallback(ctx: Context): Promise<void> {
-  await ctx.answerCallbackQuery();
-
-  const from = ctx.from;
-  if (!from) {
-    return;
-  }
-
-  const userId = BigInt(from.id);
-
-  const commonAccess = await prisma.commonAccess.findUnique({
-    where: { userId },
-  });
-
-  if (!commonAccess || commonAccess.inGroup) {
-    await ctx.reply(COMMON_ACCESS_ALREADY_ACTIVE_MESSAGE);
-    return;
-  }
-
-  try {
-    await resendCommonAccessInviteLink(userId);
-  } catch (err) {
-    logger.error({ err, userId: userId.toString() }, 'failed to resend common access invite link');
-    await ctx.reply(RESEND_LINK_ERROR_MESSAGE);
-  }
 }
