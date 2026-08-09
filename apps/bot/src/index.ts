@@ -3,6 +3,7 @@ import formbody from '@fastify/formbody';
 import { API_CONSTANTS } from 'grammy';
 
 import { commonBot, subscriptionBot } from './bot/bot.js';
+import { applyCommandScopes } from './bot/commands.js';
 import { config } from './config.js';
 import { startScheduler } from './jobs/scheduler.js';
 import { logger } from './logger.js';
@@ -33,6 +34,11 @@ commonBot.catch((err) => {
 startScheduler();
 
 const allowedUpdates = [...API_CONSTANTS.DEFAULT_UPDATE_TYPES, 'chat_member'] as const;
+
+await Promise.all([
+  applyCommandScopes(subscriptionBot, 'subscription'),
+  applyCommandScopes(commonBot, 'common'),
+]);
 
 await Promise.all([
   fastify.listen({ port: config.PORT, host: '0.0.0.0' }).then(() => {
