@@ -3,6 +3,7 @@ import type { Context } from 'grammy';
 
 import { config } from '../../config.js';
 import { runDailyCheck } from '../../jobs/dailyCheck.js';
+import { buildAdminLoginUrl } from '../../services/adminAuth.js';
 import { getMoscowDayBounds } from '../../util/moscowDate.js';
 import { adminKeyboard } from '../keyboards.js';
 
@@ -13,8 +14,15 @@ const CHECK_SKIPPED_MESSAGE =
   '⏳ Проверка уже выполняется другим процессом. Запуск пропущен.';
 
 export async function handleAdmin(ctx: Context): Promise<void> {
+  const from = ctx.from;
+  if (!from) {
+    return;
+  }
+
+  const loginUrl = buildAdminLoginUrl(config.ADMIN_PANEL_URL, BigInt(from.id), new Date());
+
   await ctx.reply(ADMIN_MENU_MESSAGE, {
-    reply_markup: adminKeyboard(config.ADMIN_PANEL_URL),
+    reply_markup: adminKeyboard(loginUrl),
   });
 }
 

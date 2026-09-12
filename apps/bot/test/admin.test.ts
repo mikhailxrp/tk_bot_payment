@@ -40,7 +40,7 @@ vi.mock('../src/jobs/dailyCheck.js', () => ({
 }));
 
 vi.mock('../src/config.js', () => ({
-  config: { ADMIN_PANEL_URL: 'https://admin.example.com' },
+  config: { ADMIN_PANEL_URL: 'https://admin.example.com', AUTH_SECRET: 'test-secret' },
 }));
 
 import {
@@ -110,7 +110,7 @@ describe('/admin handlers', () => {
     vi.useRealTimers();
   });
 
-  it('handleAdmin sends keyboard with check, summary callbacks and panel url button', async () => {
+  it('handleAdmin sends keyboard with check, summary callbacks and a one-time panel login link', async () => {
     const { ctx, reply } = createMockContext();
 
     await handleAdmin(ctx);
@@ -120,7 +120,12 @@ describe('/admin handlers', () => {
     expect(buttons).toEqual([
       { text: '🔄 Проверить подписки', callback_data: ADMIN_CHECK_CALLBACK },
       { text: '📊 Сводка', callback_data: ADMIN_SUMMARY_CALLBACK },
-      { text: '🔗 Панель', url: 'https://admin.example.com' },
+      {
+        text: '🔗 Панель',
+        url: expect.stringMatching(
+          /^https:\/\/admin\.example\.com\/login\/telegram\?token=\d+\.\d+\.[0-9a-f]{64}$/,
+        ) as unknown as string,
+      },
     ]);
   });
 

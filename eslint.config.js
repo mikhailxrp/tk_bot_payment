@@ -1,11 +1,19 @@
 // @ts-check
 import js from '@eslint/js';
+import nextPlugin from '@next/eslint-plugin-next';
 import eslintConfigPrettier from 'eslint-config-prettier';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/.next/**', '**/generated/**'],
+    ignores: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/build/**',
+      '**/.next/**',
+      '**/generated/**',
+      'apps/admin/next-env.d.ts',
+    ],
   },
   js.configs.recommended,
   {
@@ -23,6 +31,10 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
+  },
+  {
+    files: ['apps/admin/**/*.ts', 'apps/admin/**/*.tsx'],
+    ...nextPlugin.flatConfig.coreWebVitals,
   },
   eslintConfigPrettier,
 );

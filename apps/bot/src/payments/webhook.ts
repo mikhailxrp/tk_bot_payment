@@ -10,7 +10,7 @@ import {
   applyCommonAccess,
   applyPayment,
   grantAccessAfterPayment,
-  unmuteUserAfterPayment,
+  unbanUserAfterPayment,
   type GrantAccessAfterPaymentParams,
 } from '../services/subscription.js';
 import { verifyResultSignature } from './robokassa.js';
@@ -43,6 +43,33 @@ async function grantAccessBestEffort(result: WebhookOkResult): Promise<void> {
 
   const targetBot = result.access.product === ProductType.LIFETIME ? commonBot : subscriptionBot;
 
+  // Unban before creating the invite link below — Telegram won't let a still-banned user
+  // join the group through it.
+  if (result.access.product === ProductType.SUBSCRIPTION && result.access.wasMuted) {
+    try {
+      const unbanned = await unbanUserAfterPayment(result.access.userId);
+      if (!unbanned) {
+        logger.error(
+          {
+            invId: result.invId,
+            userId: result.access.userId.toString(),
+          },
+          'robokassa webhook: failed to unban user after payment',
+        );
+
+        await notifyAdmins(
+          subscriptionBot,
+          `⚠️ Ошибка unban после оплаты (InvId ${result.invId}). Проверьте вручную.`,
+        );
+      }
+    } catch (alertErr) {
+      logger.error(
+        { err: alertErr, invId: result.invId },
+        'robokassa webhook: failed to notify admins about unban error',
+      );
+    }
+  }
+
   try {
     await grantAccessAfterPayment(result.access);
   } catch (err) {
@@ -64,34 +91,6 @@ async function grantAccessBestEffort(result: WebhookOkResult): Promise<void> {
       logger.error(
         { err: alertErr, invId: result.invId },
         'robokassa webhook: failed to notify admins about grant access error',
-      );
-    }
-  }
-
-  if (
-    result.access.product === ProductType.SUBSCRIPTION &&
-    result.access.wasMuted
-  ) {
-    try {
-      const unmuted = await unmuteUserAfterPayment(result.access.userId);
-      if (!unmuted) {
-        logger.error(
-          {
-            invId: result.invId,
-            userId: result.access.userId.toString(),
-          },
-          'robokassa webhook: failed to unmute user after payment',
-        );
-
-        await notifyAdmins(
-          subscriptionBot,
-          `⚠️ Ошибка unmute после оплаты (InvId ${result.invId}). Проверьте вручную.`,
-        );
-      }
-    } catch (alertErr) {
-      logger.error(
-        { err: alertErr, invId: result.invId },
-        'robokassa webhook: failed to notify admins about unmute error',
       );
     }
   }

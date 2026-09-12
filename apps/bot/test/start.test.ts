@@ -84,7 +84,7 @@ vi.mock('../src/services/subscription.js', () => ({
 }));
 
 vi.mock('../src/config.js', () => ({
-  config: { ADMIN_PANEL_URL: 'https://admin.example.com' },
+  config: { ADMIN_PANEL_URL: 'https://admin.example.com', AUTH_SECRET: 'test-secret' },
 }));
 
 vi.mock('../src/jobs/dailyCheck.js', () => ({
@@ -205,7 +205,12 @@ describe('handleSubscriptionStart', () => {
     expect(buttons).toEqual([
       { text: '🔄 Проверить подписки', callback_data: 'admin_check' },
       { text: '📊 Сводка', callback_data: 'admin_summary' },
-      { text: '🔗 Панель', url: 'https://admin.example.com' },
+      {
+        text: '🔗 Панель',
+        url: expect.stringMatching(
+          /^https:\/\/admin\.example\.com\/login\/telegram\?token=\d+\.\d+\.[0-9a-f]{64}$/,
+        ) as unknown as string,
+      },
     ]);
   });
 

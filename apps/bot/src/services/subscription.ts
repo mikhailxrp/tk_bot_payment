@@ -78,23 +78,16 @@ export async function applyPayment(
   return { expiresAt, wasMuted };
 }
 
-export async function unmuteUserAfterPayment(userId: bigint): Promise<boolean> {
+export async function unbanUserAfterPayment(userId: bigint): Promise<boolean> {
   try {
-    const chat = await subscriptionBot.api.getChat(config.GROUP_ID.toString());
-    if (!chat.permissions) {
-      throw new Error('Group chat permissions are unavailable');
-    }
-
-    await subscriptionBot.api.restrictChatMember(
-      config.GROUP_ID.toString(),
-      Number(userId),
-      chat.permissions,
-    );
+    await subscriptionBot.api.unbanChatMember(config.GROUP_ID.toString(), Number(userId), {
+      only_if_banned: true,
+    });
     return true;
   } catch (err) {
     logger.error(
       { err, userId: userId.toString() },
-      'payment: failed to unmute user after payment',
+      'payment: failed to unban user after payment',
     );
     return false;
   }
@@ -156,7 +149,7 @@ export async function createSubscriptionPaymentLink(
  * Atomic per-user guard against the ACTIVE+expired condition. DB-only by design: this must
  * stay fast, since it runs inside the daily-check transaction alongside the GET_LOCK, which
  * has a 5s interactive-transaction timeout. Telegram calls belong outside that transaction
- * (see `restrictExpiredUser`) — putting network I/O in here previously caused the transaction
+ * (see `banExpiredUser`) — putting network I/O in here previously caused the transaction
  * to time out and roll back committed MUTED rows while the Telegram-side mute had already
  * taken effect, desyncing DB state from reality.
  */
@@ -258,14 +251,12 @@ export async function selectAndMarkMutedReminders(
   return marked;
 }
 
-export async function restrictExpiredUser(userId: bigint): Promise<boolean> {
+export async function banExpiredUser(userId: bigint): Promise<boolean> {
   try {
-    await subscriptionBot.api.restrictChatMember(config.GROUP_ID.toString(), Number(userId), {
-      can_send_messages: false,
-    });
+    await subscriptionBot.api.banChatMember(config.GROUP_ID.toString(), Number(userId));
     return true;
   } catch (err) {
-    logger.error({ err, userId: userId.toString() }, 'daily check: failed to restrictChatMember');
+    logger.error({ err, userId: userId.toString() }, 'daily check: failed to banChatMember');
     return false;
   }
 }
@@ -287,7 +278,7 @@ export function buildActiveReminderMessage(remindDays: number): string {
 }
 
 export function buildMutedReminderMessage(): string {
-  return 'Доступ к закрытой группе всё ещё ограничен из-за неоплаченной подписки. Оплатите, чтобы восстановить доступ.';
+  return 'Вы всё ещё не в закрытой группе из-за неоплаченной подписки. Оплатите, чтобы получить новую ссылку и вернуться.';
 }
 
 function resolveGroupId(product: ProductType): bigint {
