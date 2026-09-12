@@ -44,8 +44,7 @@ const {
   mockCommonAccessUpsert,
   mockCreateChatInviteLink,
   mockSendMessage,
-  mockGetChat,
-  mockRestrictChatMember,
+  mockUnbanChatMember,
   mockNotifyAdmins,
   mockLoggerError,
 } = vi.hoisted(() => ({
@@ -62,17 +61,9 @@ const {
   mockCreateChatInviteLink:
     vi.fn<(chatId: string, options: { member_limit: number }) => Promise<{ invite_link: string }>>(),
   mockSendMessage: vi.fn<(chatId: string, text: string) => Promise<unknown>>(),
-  mockGetChat:
+  mockUnbanChatMember:
     vi.fn<
-      (chatId: string) => Promise<{ permissions: Record<string, boolean> }>
-    >(),
-  mockRestrictChatMember:
-    vi.fn<
-      (
-        chatId: string,
-        userId: number,
-        permissions: Record<string, boolean>,
-      ) => Promise<unknown>
+      (chatId: string, userId: number, options: { only_if_banned: boolean }) => Promise<unknown>
     >(),
   mockNotifyAdmins: vi.fn<(bot: unknown, text: string) => Promise<void>>(),
   mockLoggerError: vi.fn<(obj: unknown, msg?: string) => void>(),
@@ -102,16 +93,14 @@ vi.mock('../src/bot/bot.js', () => ({
     api: {
       createChatInviteLink: mockCreateChatInviteLink,
       sendMessage: mockSendMessage,
-      getChat: mockGetChat,
-      restrictChatMember: mockRestrictChatMember,
+      unbanChatMember: mockUnbanChatMember,
     },
   },
   commonBot: {
     api: {
       createChatInviteLink: mockCreateChatInviteLink,
       sendMessage: mockSendMessage,
-      getChat: mockGetChat,
-      restrictChatMember: mockRestrictChatMember,
+      unbanChatMember: mockUnbanChatMember,
     },
   },
 }));
@@ -131,12 +120,6 @@ vi.mock('../src/logger.js', () => ({
 import { commonBot, subscriptionBot } from '../src/bot/bot.js';
 import { config } from '../src/config.js';
 import { registerRobokassaWebhook } from '../src/payments/webhook.js';
-
-const GROUP_PERMISSIONS = {
-  can_send_messages: true,
-  can_send_audios: true,
-  can_send_documents: true,
-};
 
 function buildValidSignature(outSum: string, invId: number): string {
   return createHash('md5')
@@ -195,8 +178,7 @@ describe('POST /robokassa/result', () => {
     });
     mockSendMessage.mockResolvedValue({});
     mockNotifyAdmins.mockResolvedValue(undefined);
-    mockGetChat.mockResolvedValue({ permissions: GROUP_PERMISSIONS });
-    mockRestrictChatMember.mockResolvedValue({});
+    mockUnbanChatMember.mockResolvedValue({});
 
     mockTransaction.mockImplementation((callback) =>
       callback({
@@ -404,7 +386,7 @@ describe('POST /robokassa/result', () => {
     await app.close();
   });
 
-  it('unmutes MUTED user after SUBSCRIPTION payment via getChat and restrictChatMember', async () => {
+  it('unbans MUTED user after SUBSCRIPTION payment via unbanChatMember', async () => {
     mockUserFindUniqueOrThrow.mockImplementation((args: unknown) => {
       const select = (args as { select?: { username?: boolean; status?: boolean } }).select;
       if (select?.username !== undefined) {
@@ -428,17 +410,16 @@ describe('POST /robokassa/result', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toBe(`OK${invId}`);
-    expect(mockGetChat).toHaveBeenCalledWith(config.GROUP_ID.toString());
-    expect(mockRestrictChatMember).toHaveBeenCalledWith(
+    expect(mockUnbanChatMember).toHaveBeenCalledWith(
       config.GROUP_ID.toString(),
       1,
-      GROUP_PERMISSIONS,
+      { only_if_banned: true },
     );
 
     await app.close();
   });
 
-  it('does not unmute ACTIVE user after SUBSCRIPTION payment', async () => {
+  it('does not unban ACTIVE user after SUBSCRIPTION payment', async () => {
     const app = await createTestApp();
     const outSum = '500.00';
     const invId = 42;
@@ -451,13 +432,12 @@ describe('POST /robokassa/result', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toBe(`OK${invId}`);
-    expect(mockGetChat).not.toHaveBeenCalled();
-    expect(mockRestrictChatMember).not.toHaveBeenCalled();
+    expect(mockUnbanChatMember).not.toHaveBeenCalled();
 
     await app.close();
   });
 
-  it('does not unmute NEW user after SUBSCRIPTION payment', async () => {
+  it('does not unban NEW user after SUBSCRIPTION payment', async () => {
     mockUserFindUniqueOrThrow.mockImplementation((args: unknown) => {
       const select = (args as { select?: { username?: boolean; status?: boolean } }).select;
       if (select?.username !== undefined) {
@@ -480,13 +460,12 @@ describe('POST /robokassa/result', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(mockGetChat).not.toHaveBeenCalled();
-    expect(mockRestrictChatMember).not.toHaveBeenCalled();
+    expect(mockUnbanChatMember).not.toHaveBeenCalled();
 
     await app.close();
   });
 
-  it('never unmutes on LIFETIME payment even if user was MUTED', async () => {
+  it('never unbans on LIFETIME payment even if user was MUTED', async () => {
     mockFindUniqueOrThrow.mockResolvedValue({
       id: 42,
       userId: BigInt(99),
@@ -515,13 +494,12 @@ describe('POST /robokassa/result', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(mockGetChat).not.toHaveBeenCalled();
-    expect(mockRestrictChatMember).not.toHaveBeenCalled();
+    expect(mockUnbanChatMember).not.toHaveBeenCalled();
 
     await app.close();
   });
 
-  it('still returns OK{InvId} and alerts admins when unmute fails after commit', async () => {
+  it('still returns OK{InvId} and alerts admins when unban fails after commit', async () => {
     mockUserFindUniqueOrThrow.mockImplementation((args: unknown) => {
       const select = (args as { select?: { username?: boolean; status?: boolean } }).select;
       if (select?.username !== undefined) {
@@ -532,7 +510,7 @@ describe('POST /robokassa/result', () => {
         expiresAt: new Date('2026-01-01T12:00:00.000Z'),
       });
     });
-    mockGetChat.mockRejectedValue(new Error('telegram getChat failed'));
+    mockUnbanChatMember.mockRejectedValue(new Error('telegram unbanChatMember failed'));
 
     const app = await createTestApp();
     const outSum = '500.00';
@@ -548,15 +526,15 @@ describe('POST /robokassa/result', () => {
     expect(response.body).toBe(`OK${invId}`);
     expect(mockLoggerError).toHaveBeenCalledWith(
       expect.objectContaining({ userId: '1' }),
-      'payment: failed to unmute user after payment',
+      'payment: failed to unban user after payment',
     );
     expect(mockLoggerError).toHaveBeenCalledWith(
       expect.objectContaining({ invId }),
-      'robokassa webhook: failed to unmute user after payment',
+      'robokassa webhook: failed to unban user after payment',
     );
     expect(mockNotifyAdmins).toHaveBeenCalledWith(
       expect.anything(),
-      expect.stringContaining('Ошибка unmute после оплаты'),
+      expect.stringContaining('Ошибка unban после оплаты'),
     );
 
     await app.close();

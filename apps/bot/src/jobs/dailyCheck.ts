@@ -10,13 +10,13 @@ import {
   type PersonalMessage,
 } from '../services/notify.js';
 import {
+  banExpiredUser,
   buildActiveReminderMessage,
   buildMutedReminderMessage,
   createSubscriptionPaymentLink,
   formatUserMention,
   muteExpiredUser,
   readPositiveIntSetting,
-  restrictExpiredUser,
   selectAndMarkActiveReminders,
   selectAndMarkMutedReminders,
   type ReminderCandidate,
@@ -25,7 +25,7 @@ import {
 const DAILY_CHECK_LOCK_NAME = 'daily_check';
 
 const EXPIRED_SUBSCRIPTION_MESSAGE =
-  'Ваша подписка на закрытую группу истекла, и доступ приостановлен. Оплатите продление, чтобы снова писать в группе.';
+  'Ваша подписка на закрытую группу истекла, и вы были удалены из группы. Оплатите продление, чтобы получить новую ссылку и вернуться.';
 
 type DailyCheckOutcome =
   | { acquired: false }
@@ -53,17 +53,17 @@ function buildSummary(
   activeReminderSentCount: number,
   mutedReminderSentCount: number,
 ): string {
-  const mutedPart =
+  const removedPart =
     mutedUsers.length === 0
-      ? 'замьючено 0 пользователей'
-      : `замьючено ${mutedUsers.length} пользователей: ${mutedUsers
+      ? 'удалено 0 пользователей'
+      : `удалено ${mutedUsers.length} пользователей: ${mutedUsers
           .map((user) => formatUserMention(user.username, user.id))
           .join(', ')}`;
 
   return (
-    `Ежедневная проверка подписок: ${mutedPart}. ` +
+    `Ежедневная проверка подписок: ${removedPart}. ` +
     `Напоминаний отправлено: активным ${activeReminderSentCount}, ` +
-    `замьюченным ${mutedReminderSentCount}.`
+    `удалённым ${mutedReminderSentCount}.`
   );
 }
 
@@ -144,7 +144,7 @@ export async function runDailyCheck(): Promise<{ ranNow: boolean }> {
   const muteMessages: PersonalMessage[] = [];
 
   for (const candidate of outcome.mutedUsers) {
-    await restrictExpiredUser(candidate.id);
+    await banExpiredUser(candidate.id);
 
     const link = await createSubscriptionPaymentLink(candidate.id);
     if (!link) {

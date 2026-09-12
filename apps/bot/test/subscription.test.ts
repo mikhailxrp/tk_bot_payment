@@ -12,8 +12,8 @@ type UserUpdateManyArgs = {
 const {
   mockCreateChatInviteLink,
   mockSendMessage,
-  mockGetChat,
-  mockRestrictChatMember,
+  mockBanChatMember,
+  mockUnbanChatMember,
   mockNotifyAdmins,
   mockSettingFindUnique,
   mockPaymentCreate,
@@ -22,17 +22,10 @@ const {
   mockCreateChatInviteLink:
     vi.fn<(chatId: string, options: { member_limit: number }) => Promise<{ invite_link: string }>>(),
   mockSendMessage: vi.fn<(chatId: string, text: string) => Promise<unknown>>(),
-  mockGetChat:
+  mockBanChatMember: vi.fn<(chatId: string, userId: number) => Promise<unknown>>(),
+  mockUnbanChatMember:
     vi.fn<
-      (chatId: string) => Promise<{ permissions: Record<string, boolean> }>
-    >(),
-  mockRestrictChatMember:
-    vi.fn<
-      (
-        chatId: string,
-        userId: number,
-        permissions: Record<string, boolean>,
-      ) => Promise<unknown>
+      (chatId: string, userId: number, options: { only_if_banned: boolean }) => Promise<unknown>
     >(),
   mockNotifyAdmins: vi.fn<(bot: unknown, text: string) => Promise<void>>(),
   mockSettingFindUnique: vi.fn<(args: SettingFindArgs) => Promise<SettingRecord>>(),
@@ -45,16 +38,16 @@ vi.mock('../src/bot/bot.js', () => ({
     api: {
       createChatInviteLink: mockCreateChatInviteLink,
       sendMessage: mockSendMessage,
-      getChat: mockGetChat,
-      restrictChatMember: mockRestrictChatMember,
+      banChatMember: mockBanChatMember,
+      unbanChatMember: mockUnbanChatMember,
     },
   },
   commonBot: {
     api: {
       createChatInviteLink: mockCreateChatInviteLink,
       sendMessage: mockSendMessage,
-      getChat: mockGetChat,
-      restrictChatMember: mockRestrictChatMember,
+      banChatMember: mockBanChatMember,
+      unbanChatMember: mockUnbanChatMember,
     },
   },
 }));
@@ -81,15 +74,15 @@ import { commonBot, subscriptionBot } from '../src/bot/bot.js';
 import { config } from '../src/config.js';
 import {
   applyPayment,
+  banExpiredUser,
   calculateNewExpiresAt,
   createSubscriptionPaymentLink,
   grantAccessAfterPayment,
   muteExpiredUser,
   readPositiveIntSetting,
-  restrictExpiredUser,
   selectAndMarkActiveReminders,
   selectAndMarkMutedReminders,
-  unmuteUserAfterPayment,
+  unbanUserAfterPayment,
 } from '../src/services/subscription.js';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -293,7 +286,7 @@ describe('muteExpiredUser', () => {
       where: { id: TEST_USER_ID, status: 'ACTIVE', expiresAt: { lte: now } },
       data: { status: 'MUTED', mutedAt: now },
     });
-    expect(mockRestrictChatMember).not.toHaveBeenCalled();
+    expect(mockBanChatMember).not.toHaveBeenCalled();
   });
 
   it('returns false when the guard matches no row', async () => {
@@ -309,34 +302,33 @@ describe('muteExpiredUser', () => {
   });
 });
 
-describe('restrictExpiredUser', () => {
+describe('banExpiredUser', () => {
   const TEST_USER_ID = BigInt(111222333);
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockRestrictChatMember.mockResolvedValue({});
+    mockBanChatMember.mockResolvedValue({});
   });
 
-  it('calls restrictChatMember and returns true on success', async () => {
-    const result = await restrictExpiredUser(TEST_USER_ID);
+  it('calls banChatMember and returns true on success', async () => {
+    const result = await banExpiredUser(TEST_USER_ID);
 
     expect(result).toBe(true);
-    expect(mockRestrictChatMember).toHaveBeenCalledWith(
+    expect(mockBanChatMember).toHaveBeenCalledWith(
       config.GROUP_ID.toString(),
       Number(TEST_USER_ID),
-      { can_send_messages: false },
     );
   });
 
-  it('logs and returns false when restrictChatMember fails', async () => {
-    mockRestrictChatMember.mockRejectedValue(new Error('telegram restrictChatMember failed'));
+  it('logs and returns false when banChatMember fails', async () => {
+    mockBanChatMember.mockRejectedValue(new Error('telegram banChatMember failed'));
 
-    const result = await restrictExpiredUser(TEST_USER_ID);
+    const result = await banExpiredUser(TEST_USER_ID);
 
     expect(result).toBe(false);
     expect(mockLoggerError).toHaveBeenCalledWith(
       expect.objectContaining({ userId: TEST_USER_ID.toString() }),
-      expect.stringContaining('restrictChatMember'),
+      expect.stringContaining('banChatMember'),
     );
   });
 });
@@ -410,41 +402,34 @@ describe('applyPayment', () => {
   });
 });
 
-describe('unmuteUserAfterPayment', () => {
+describe('unbanUserAfterPayment', () => {
   const TEST_USER_ID = BigInt(777888999);
-  const groupPermissions = {
-    can_send_messages: true,
-    can_send_audios: true,
-    can_send_documents: true,
-  };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetChat.mockResolvedValue({ permissions: groupPermissions });
-    mockRestrictChatMember.mockResolvedValue({});
+    mockUnbanChatMember.mockResolvedValue({});
   });
 
-  it('calls getChat and restrictChatMember with group permissions', async () => {
-    const result = await unmuteUserAfterPayment(TEST_USER_ID);
+  it('calls unbanChatMember with only_if_banned', async () => {
+    const result = await unbanUserAfterPayment(TEST_USER_ID);
 
     expect(result).toBe(true);
-    expect(mockGetChat).toHaveBeenCalledWith(config.GROUP_ID.toString());
-    expect(mockRestrictChatMember).toHaveBeenCalledWith(
+    expect(mockUnbanChatMember).toHaveBeenCalledWith(
       config.GROUP_ID.toString(),
       Number(TEST_USER_ID),
-      groupPermissions,
+      { only_if_banned: true },
     );
   });
 
-  it('logs error and returns false when restrictChatMember fails', async () => {
-    mockRestrictChatMember.mockRejectedValue(new Error('telegram restrictChatMember failed'));
+  it('logs error and returns false when unbanChatMember fails', async () => {
+    mockUnbanChatMember.mockRejectedValue(new Error('telegram unbanChatMember failed'));
 
-    const result = await unmuteUserAfterPayment(TEST_USER_ID);
+    const result = await unbanUserAfterPayment(TEST_USER_ID);
 
     expect(result).toBe(false);
     expect(mockLoggerError).toHaveBeenCalledWith(
       expect.objectContaining({ userId: TEST_USER_ID.toString() }),
-      'payment: failed to unmute user after payment',
+      'payment: failed to unban user after payment',
     );
   });
 });

@@ -28,7 +28,7 @@ type UpdateManyArgs = { where: WhereClause; data: Record<string, unknown> };
 type SettingFindArgs = { where: { key: string } };
 
 const {
-  mockRestrictChatMember,
+  mockBanChatMember,
   mockSendMessage,
   mockNotifyAdmins,
   mockSettingFindUnique,
@@ -145,14 +145,7 @@ const {
   );
 
   return {
-    mockRestrictChatMember:
-      vi.fn<
-        (
-          chatId: string,
-          userId: number,
-          permissions: { can_send_messages: boolean },
-        ) => Promise<unknown>
-      >(),
+    mockBanChatMember: vi.fn<(chatId: string, userId: number) => Promise<unknown>>(),
     mockSendMessage:
       vi.fn<(chatId: string, text: string, options?: unknown) => Promise<unknown>>(),
     mockNotifyAdmins: vi.fn<(bot: unknown, text: string) => Promise<void>>(),
@@ -180,7 +173,7 @@ vi.mock('@tg-bot/db', () => ({
 vi.mock('../src/bot/bot.js', () => ({
   subscriptionBot: {
     api: {
-      restrictChatMember: mockRestrictChatMember,
+      banChatMember: mockBanChatMember,
       sendMessage: mockSendMessage,
     },
   },
@@ -236,7 +229,7 @@ describe('runDailyCheck', () => {
     fixtureState.lockHeld = false;
     fixtureState.queryRawCalls.length = 0;
 
-    mockRestrictChatMember.mockResolvedValue({});
+    mockBanChatMember.mockResolvedValue({});
     mockSendMessage.mockResolvedValue({});
     mockNotifyAdmins.mockResolvedValue(undefined);
     mockSettingFindUnique.mockImplementation(({ where }) => {
@@ -274,18 +267,14 @@ describe('runDailyCheck', () => {
     expect(result).toEqual({ ranNow: true });
     expect(user.status).toBe('MUTED');
     expect(user.mutedAt?.getTime()).toBe(NOW.getTime());
-    expect(mockRestrictChatMember).toHaveBeenCalledWith(
-      expect.any(String),
-      1,
-      { can_send_messages: false },
-    );
+    expect(mockBanChatMember).toHaveBeenCalledWith(expect.any(String), 1);
     expect(mockSendMessage).toHaveBeenCalledOnce();
     const [, , sendOptions] = mockSendMessage.mock.calls[0] ?? [];
     expect((sendOptions as { reply_markup?: unknown })?.reply_markup).toBeDefined();
 
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
     const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
-    expect(summary).toContain('замьючено 1');
+    expect(summary).toContain('удалено 1');
     expect(summary).toContain('@alice');
   });
 
@@ -305,7 +294,7 @@ describe('runDailyCheck', () => {
     await runDailyCheck();
 
     expect(user.status).toBe('ACTIVE');
-    expect(mockRestrictChatMember).not.toHaveBeenCalled();
+    expect(mockBanChatMember).not.toHaveBeenCalled();
   });
 
   it('never touches a user with no active SUBSCRIPTION (e.g. CommonAccess-only, status NEW)', async () => {
@@ -319,7 +308,7 @@ describe('runDailyCheck', () => {
     await runDailyCheck();
 
     expect(user.status).toBe('NEW');
-    expect(mockRestrictChatMember).not.toHaveBeenCalled();
+    expect(mockBanChatMember).not.toHaveBeenCalled();
   });
 
   it('does not reprocess a user already MUTED (idempotent same-day rerun)', async () => {
@@ -333,21 +322,21 @@ describe('runDailyCheck', () => {
 
     await runDailyCheck();
 
-    expect(mockRestrictChatMember).not.toHaveBeenCalled();
+    expect(mockBanChatMember).not.toHaveBeenCalled();
     expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
-  it('sends the admin summary with "замьючено 0" and does not early-return when nothing is expired', async () => {
+  it('sends the admin summary with "удалено 0" and does not early-return when nothing is expired', async () => {
     fixtureState.users = [];
 
     await runDailyCheck();
 
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
     const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
-    expect(summary).toContain('замьючено 0');
+    expect(summary).toContain('удалено 0');
   });
 
-  it('continues processing remaining users when restrictChatMember fails for one of them', async () => {
+  it('continues processing remaining users when banChatMember fails for one of them', async () => {
     const failing = makeUser({
       id: BigInt(6),
       username: 'bob',
@@ -360,9 +349,9 @@ describe('runDailyCheck', () => {
     });
     fixtureState.users = [failing, ok];
 
-    mockRestrictChatMember.mockImplementation((_chatId, userId) => {
+    mockBanChatMember.mockImplementation((_chatId, userId) => {
       if (userId === 6) {
-        return Promise.reject(new Error('telegram restrictChatMember failed'));
+        return Promise.reject(new Error('telegram banChatMember failed'));
       }
       return Promise.resolve({});
     });
@@ -375,7 +364,7 @@ describe('runDailyCheck', () => {
     expect(ok.status).toBe('MUTED');
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
     const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
-    expect(summary).toContain('замьючено 2');
+    expect(summary).toContain('удалено 2');
   });
 
   it('continues processing remaining users when sendMessage fails for one of them', async () => {
@@ -399,7 +388,7 @@ describe('runDailyCheck', () => {
     expect(mockSendMessage).toHaveBeenCalledTimes(2);
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
     const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
-    expect(summary).toContain('замьючено 2');
+    expect(summary).toContain('удалено 2');
   });
 
   it('skips processing and logs when GET_LOCK is not acquired (concurrent run)', async () => {
@@ -590,7 +579,7 @@ describe('runDailyCheck', () => {
 
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
     const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
-    expect(summary).toContain('Напоминаний отправлено: активным 1, замьюченным 0');
+    expect(summary).toContain('Напоминаний отправлено: активным 1, удалённым 0');
   });
 
   it('sends a muted reminder with a payment-link keyboard and counts it in the summary', async () => {
@@ -612,7 +601,7 @@ describe('runDailyCheck', () => {
 
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
     const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
-    expect(summary).toContain('Напоминаний отправлено: активным 0, замьюченным 1');
+    expect(summary).toContain('Напоминаний отправлено: активным 0, удалённым 1');
   });
 
   it('summary contains zero reminder counters when nothing is selected', async () => {
@@ -622,7 +611,7 @@ describe('runDailyCheck', () => {
 
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
     const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
-    expect(summary).toContain('Напоминаний отправлено: активным 0, замьюченным 0');
+    expect(summary).toContain('Напоминаний отправлено: активным 0, удалённым 0');
   });
 
   it('does not send any message to a CommonAccess-only user (status NEW)', async () => {
@@ -683,7 +672,7 @@ describe('runDailyCheck', () => {
 
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
     const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
-    expect(summary).toContain('Напоминаний отправлено: активным 0, замьюченным 0');
+    expect(summary).toContain('Напоминаний отправлено: активным 0, удалённым 0');
   });
 
   it('continues sending reminders to remaining candidates when sendMessage fails for one', async () => {
@@ -713,6 +702,6 @@ describe('runDailyCheck', () => {
 
     expect(mockNotifyAdmins).toHaveBeenCalledOnce();
     const [, summary] = mockNotifyAdmins.mock.calls[0] ?? [];
-    expect(summary).toContain('Напоминаний отправлено: активным 0, замьюченным 1');
+    expect(summary).toContain('Напоминаний отправлено: активным 0, удалённым 1');
   });
 });

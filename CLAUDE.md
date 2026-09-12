@@ -80,7 +80,7 @@ docker-compose.yml
    - `OutSum` — строка с двумя знаками после точки, одинаковый формат в ссылке и подписи.
 4. **Receipt обязателен** (Робокасса сама шлёт чеки): items с `payment_object: "service"`, `sno`/`tax` — из настроек/env, не хардкодить.
 5. **Оплата → (продление + unmute + Payment.PAID)** — одна `prisma.$transaction`.
-6. **«Блокировка» = mute:** `restrictChatMember(groupId, userId, { can_send_messages: false })`. Никогда `banChatMember`. Unmute — restrictChatMember с правами по умолчанию супергруппы.
+6. **«Блокировка» = удаление из группы:** при истечении подписки — `banChatMember(groupId, userId)`, пользователь остаётся забанен (не может зайти по старой/чужой ссылке) до оплаты. При оплате — `unbanChatMember(groupId, userId, { only_if_banned: true })`, затем выдать новую одноразовую invite-ссылку (см. п.7). Статус/поля в БД остаются `MUTED`/`mutedAt`/`lastMutedRemindAt` по историческим причинам, но физически это бан, а не mute.
 7. **Invite-ссылки:** `createChatInviteLink({ member_limit: 1 })`, одноразовые, в момент успешной оплаты, не переиспользовать.
 8. **telegram_id — BigInt** везде (id > 2^31 существуют). Помнить про BigInt при JSON-сериализации (панель!).
 9. **Продление:** активная → `expiresAt + 30d`; истёкшая → `now + 30d`. При оплате сбрасывать `reminderSentAt` и `lastMutedRemindAt`.
