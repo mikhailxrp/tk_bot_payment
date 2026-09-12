@@ -38,6 +38,7 @@ model User {
   createdAt         DateTime      @default(now())
   payments          Payment[]
   commonAccess      CommonAccess?
+  groupActivity     GroupActivity[]
 }
 
 model Payment {
@@ -57,6 +58,17 @@ model CommonAccess {
   inGroup   Boolean  @default(false)
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id])
+}
+
+// Дневной агрегат активности в закрытой группе (для DAU/WAU/топа активных в дашборде).
+// Только счётчик, без хранения текста/содержимого сообщений.
+model GroupActivity {
+  userId       BigInt
+  date         DateTime @db.Date // календарный день по Europe/Moscow
+  messageCount Int      @default(0)
+  user         User     @relation(fields: [userId], references: [id])
+
+  @@id([userId, date])
 }
 
 model Admin {
