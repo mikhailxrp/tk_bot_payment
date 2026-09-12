@@ -52,12 +52,14 @@
 - Для каждого таска указывай, какое приложение он затрагивает: bot / admin / db
 - Панель: Server Actions (+ Zod + `auth()` в каждом), НЕ отдельные REST API Routes
 - Панель: `'use client'` только для интерактивности; Client Components не ходят в БД
-- Бот: блокировка = restrictChatMember (mute), никогда banChatMember
+- Бот: блокировка = banChatMember (удаление из группы, остаётся забанен до оплаты), при оплате — unbanChatMember(only_if_banned) + новая invite-ссылка
 - Изменение Prisma-схемы = миграция в `packages/db`
 - `telegram_id` — BigInt везде
 - Настройки читаются из таблицы `Setting`, не кэшируются
 - Панель → Telegram только через internal API бота (Bearer `INTERNAL_API_TOKEN`)
 - Тесты на подписи Робокассы пишутся в фазе 3, не откладываются
+- Auth панели: нет формы логина email/пароль — вход только по одноразовой подписанной
+  ссылке из `/admin` (HMAC общим `AUTH_SECRET`, короткий TTL), см. prd.md §5
 
 Не пиши код. Только планирование.
 Жди подтверждения перед созданием файла.
