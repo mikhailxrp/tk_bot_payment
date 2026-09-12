@@ -9,5 +9,6 @@ export type {
   Admin,
   Setting,
   CommonAccess,
+  GroupActivity,
 } from '@prisma/client';
 export { UserStatus, PaymentStatus, ProductType } from '@prisma/client';

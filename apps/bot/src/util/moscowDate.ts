@@ -50,6 +50,17 @@ export function cronTimeMatchesNow(cronTime: string, now: Date = new Date()): bo
   return getMoscowTimeHHmm(now) === expected;
 }
 
+/**
+ * Calendar-day key for a `@db.Date` column: UTC midnight of the Moscow calendar date, not the
+ * real Moscow-midnight instant. A `DATE` column has no timezone of its own, so storing the
+ * actual Moscow-midnight instant (e.g. `getMoscowDayBounds().start`, which is `21:00 UTC` the
+ * day before) would shift the stored date back by one day.
+ */
+export function getMoscowCalendarDateKey(reference: Date = new Date()): Date {
+  const calendarDate = getMoscowCalendarDate(reference);
+  return new Date(`${calendarDate}T00:00:00.000Z`);
+}
+
 export function getMoscowDayBounds(reference: Date = new Date()): { start: Date; end: Date } {
   const calendarDate = getMoscowCalendarDate(reference);
   return {

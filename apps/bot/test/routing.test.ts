@@ -8,6 +8,7 @@ const {
   mockHandleCommonAccessCallback,
   mockHandleAdmin,
   mockHandleGroupChatMemberUpdate,
+  mockHandleGroupActivityMessage,
 } = vi.hoisted(() => ({
   mockHandleSubscriptionStart: vi.fn(),
   mockHandleCommonStart: vi.fn(),
@@ -15,6 +16,7 @@ const {
   mockHandleCommonAccessCallback: vi.fn(),
   mockHandleAdmin: vi.fn(),
   mockHandleGroupChatMemberUpdate: vi.fn(),
+  mockHandleGroupActivityMessage: vi.fn(),
 }));
 
 vi.mock('../src/bot/handlers/start.js', () => ({
@@ -33,6 +35,10 @@ vi.mock('../src/bot/handlers/admin.js', () => ({
 vi.mock('../src/bot/handlers/chatMember.js', () => ({
   handleGroupChatMemberUpdate: mockHandleGroupChatMemberUpdate,
   handleCommonChatMemberUpdate: vi.fn(),
+}));
+
+vi.mock('../src/bot/handlers/groupActivity.js', () => ({
+  handleGroupActivityMessage: mockHandleGroupActivityMessage,
 }));
 
 vi.mock('../src/bot/middleware/isAdmin.js', () => ({
@@ -137,6 +143,18 @@ describe('bot routing', () => {
     await subscriptionBot.handleUpdate(callbackUpdate(PRIVATE_CHAT, 'subscribe'));
 
     expect(mockHandleSubscribeCallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes a plain group message to the group activity tracker', async () => {
+    await subscriptionBot.handleUpdate(messageUpdate(GROUP_CHAT, 'hello everyone'));
+
+    expect(mockHandleGroupActivityMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not route a private message to the group activity tracker', async () => {
+    await subscriptionBot.handleUpdate(messageUpdate(PRIVATE_CHAT, 'hello'));
+
+    expect(mockHandleGroupActivityMessage).not.toHaveBeenCalled();
   });
 
   it('still handles chat_member updates from the group', async () => {
